@@ -16,6 +16,17 @@ function text(t: string): TextResult {
   return { content: [{ type: "text", text: t }] };
 }
 
+/** Beyond this, a "fact" is a notebook entry; the write is refused with guidance. */
+const MAX_FACT_CHARS = 1500;
+
+/** Models classify far better than they calibrate: basis is the confidence input. */
+const BASIS_CONFIDENCE = {
+  "user-stated": 1.0,
+  verified: 0.95,
+  reported: 0.8,
+  inferred: 0.6,
+} as const;
+
 /**
  * Wraps a Memharness instance as an MCP server. logUsage receives the op name
  * only (dogfood-gate instrumentation; never fact content).
@@ -61,12 +72,13 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
     "remember",
     {
       description:
-        "Store ONE atomic fact in long-term memory — a single assertion, not a paragraph; " +
-        "split compound knowledge into multiple remember calls so each piece can be revised " +
-        "independently later. Use for durable knowledge about the user, their projects, " +
-        "preferences, decisions, and environment — not transient task state. If this " +
-        "contradicts an existing belief, find it with recall and use revise instead. Always " +
-        "fill source_ref with where this came from (session, file, URL) if known.",
+        "Store ONE atomic fact in long-term memory: a single assertion, ideally one sentence " +
+        "(aim for under 250 characters; writes over 1500 are rejected). Split compound " +
+        "knowledge into multiple remember calls so each piece can be revised independently " +
+        "later. Use for durable knowledge about the user, their projects, preferences, " +
+        "decisions, and environment — not transient task state. If this contradicts an " +
+        "existing belief, find it with recall and use revise instead. Always fill source_ref " +
+        "with where this came from (session, file, URL) if known.",
       inputSchema: {
         subject: z.string().describe("What the fact is about, e.g. 'user' or 'project:memharness'"),
         fact: z.string().describe("The atomic statement itself"),
@@ -74,15 +86,20 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           .string()
           .optional()
           .describe("Optional relation type, e.g. 'prefers', 'works-on'"),
+        basis: z
+          .enum(["user-stated", "verified", "reported", "inferred"])
+          .optional()
+          .describe(
+            "How you know this: user-stated (they told you), verified (you checked " +
+              "directly), reported (read in docs/code but not confirmed), inferred " +
+              "(your deduction). Sets confidence. Default user-stated",
+          ),
         confidence: z
           .number()
           .min(0)
           .max(1)
           .optional()
-          .describe(
-            "Calibrate: 1.0 only for user-stated or directly verified facts; " +
-              "0.6-0.8 for inferences and things read but not confirmed. Default 1.0",
-          ),
+          .describe("Numeric override for basis; rarely needed"),
         source_ref: z
           .string()
           .optional()
@@ -96,11 +113,17 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
     },
     (args) =>
       handle("remember", () => {
+        if (args.fact.length > MAX_FACT_CHARS) {
+          return (
+            `Not stored: ${args.fact.length} characters is a briefing note, not a fact. ` +
+            "Split it into separate remember calls, one assertion each, and try again."
+          );
+        }
         const r = mem.remember({
           subject: args.subject,
           fact: args.fact,
           predicate: args.predicate,
-          confidence: args.confidence,
+          confidence: args.confidence ?? BASIS_CONFIDENCE[args.basis ?? "user-stated"],
           sourceRef: args.source_ref,
           sourceAgent: args.source_agent ?? "mcp",
           validFrom: args.valid_from,
@@ -176,7 +199,11 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
       inputSchema: {
         old_fact_id: z.number().int().describe("Id of the fact being superseded"),
         new_fact: z.string().describe("The corrected statement"),
-        confidence: z.number().min(0).max(1).optional(),
+        basis: z
+          .enum(["user-stated", "verified", "reported", "inferred"])
+          .optional()
+          .describe("How you know the correction. Sets confidence. Default user-stated"),
+        confidence: z.number().min(0).max(1).optional().describe("Numeric override for basis"),
         source_ref: z.string().optional(),
         source_agent: z.string().optional(),
         valid_from: z
@@ -190,7 +217,7 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
         const r = mem.revise({
           oldFactId: args.old_fact_id,
           newFact: args.new_fact,
-          confidence: args.confidence,
+          confidence: args.confidence ?? BASIS_CONFIDENCE[args.basis ?? "user-stated"],
           sourceRef: args.source_ref,
           sourceAgent: args.source_agent ?? "mcp",
           validFrom: args.valid_from,

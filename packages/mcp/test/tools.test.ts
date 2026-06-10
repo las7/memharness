@@ -123,6 +123,41 @@ describe("memharness MCP server", () => {
     expect(textOf(long)).toContain("split compound knowledge");
   });
 
+  it("maps basis to confidence (categorical beats scalar for model calibration)", async () => {
+    const { mem, client } = await connected();
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "stated thing" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "deduced thing", basis: "inferred" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "checked thing", basis: "verified" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "override thing", basis: "inferred", confidence: 0.42 },
+    });
+    expect(mem.why(1).fact.confidence).toBe(1.0); // default = user-stated
+    expect(mem.why(2).fact.confidence).toBe(0.6);
+    expect(mem.why(3).fact.confidence).toBe(0.95);
+    expect(mem.why(4).fact.confidence).toBe(0.42); // explicit confidence wins
+  });
+
+  it("refuses notebook-sized facts with guidance to split", async () => {
+    const { mem, client } = await connected();
+    const r = await client.callTool({
+      name: "remember",
+      arguments: { subject: "project:x", fact: "a".repeat(1600) },
+    });
+    expect(textOf(r)).toContain("Not stored");
+    expect(textOf(r)).toContain("one assertion each");
+    expect(mem.stats().totalFacts).toBe(0);
+  });
+
   it("logs recall hit counts (zero-hit recalls are the miss signal)", async () => {
     const { client, usage, metas } = await connected();
     await client.callTool({ name: "recall", arguments: { query: "nothing stored yet" } });
