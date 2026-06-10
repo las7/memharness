@@ -1,36 +1,49 @@
 # The dogfood gate (Phase 2)
 
-Two weeks of real daily use decide whether the temporal-provenance thesis is
-real or theater. Both Claude Code and Claude Desktop on this machine are
-already pointed at the local build.
+Real daily use decides whether the temporal-provenance thesis is real or
+theater. Both Claude Code and Claude Desktop on this machine point at the
+local build.
 
-**Week 1 — accumulate.** Use Claude normally. Let it remember things. Correct
-it when it's wrong (corrections trigger `revise` — the interesting data).
-Optional system-prompt nudge:
+## Stopping rules (asymmetric on purpose)
 
-> Use memharness to remember durable facts about me and my projects
-> (remember/revise) and recall them at the start of relevant tasks. Always
-> fill source_ref with the current session/topic.
+**Success — can land any day.** One genuine moment where `diff`, `as_of`, or
+`why` answers a question you actually had, that nothing else on the machine
+could answer. Not a validation poke — a real need. Screenshot it; that's the
+launch demo. Gate passes immediately, Phase 3 starts.
 
-**Week 2 — ask the killer questions** and note honestly whether they matter:
+**Kill — needs enough history first.** History can't be faked: tx_at is
+immutable transaction time, so bulk imports don't create a past (the schema
+enforces the experiment's integrity). Declare the thesis weak only when ALL of:
 
-- "What have you learned about my project since last Monday?" (`diff`)
-- "What did you believe about X before I corrected you?" (`recall` + `as_of`)
-- "Why do you think I prefer Y?" (`why`)
-- "Forget everything from that session." (`forget` by source_ref)
+- ≥ 7 days elapsed (decision window closes 2026-06-23 regardless), and
+- the log shows ≥ 50 recalls and ≥ 10 revise events (enough belief churn for
+  the temporal queries to have had something to say), and
+- diff / as_of-recalls / why still went unused for any real purpose.
 
-**Measuring.** Every tool call is logged (op + timestamp only, no content) to
-`~/.memharness/usage.log`. Tally with:
+Then stop and reassess: pivot toward teams/audit (where "what did the agent
+believe when it acted" is a requirement, not a curiosity) or simplify.
+
+## Making the data arrive faster
+
+- Use it everywhere: tako, outerport-backend, personal — Desktop and Code.
+- Correct Claude aggressively when it's wrong. Corrections become `revise`
+  events, the raw material as_of/why feed on.
+- Seed tonight: bulk-remember what you already know (projects, preferences).
+  It doesn't create history, but it makes plain recall useful on day one,
+  which keeps the loop running long enough for history to accumulate.
+
+## Measuring
+
+Every tool call logs op + timestamp (+ recall hit counts) — never content —
+to `~/.memharness/usage.log`:
 
 ```bash
-cut -d'"' -f4 ~/.memharness/usage.log | sort | uniq -c | sort -rn
+cut -d'"' -f4 ~/.memharness/usage.log | sort | uniq -c | sort -rn   # op tally
+grep -c '"op":"revise"' ~/.memharness/usage.log                     # belief churn
+grep -c '"hits":0' ~/.memharness/usage.log                          # zero-hit recalls (miss signal)
 ```
 
-**Kill criterion:** if after two weeks the tally shows only `remember`/`recall`
-and `diff`/`as_of`-recalls/`why` go unused, the thesis is weak for individual
-users — stop and reassess (pivot to team/audit, or simplify).
-
-**Success criterion:** one moment where `diff` or `as_of` answers something
-nothing else on the machine could. Screenshot it. That's the launch demo.
-
-Gate decision date: **2026-06-23** (two weeks from setup).
+Also note, as they happen: memory misses (a zero-hit recall you knew had an
+answer — like the 2026-06-09 "work employer company" miss that became the
+porter-stemming fix), facts stored as mush instead of atomic statements, and
+any "I wish it had just—" moment. Those are roadmap.
