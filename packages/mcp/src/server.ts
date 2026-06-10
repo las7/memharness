@@ -33,6 +33,9 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
         "with source_ref set to where it came from.\n" +
         "- When new information contradicts a stored belief, recall the old fact and use " +
         "revise (not remember or forget) so history is preserved.\n" +
+        "- Keep facts atomic: one assertion per remember call.\n" +
+        "- Prefer facts recorded nowhere else (decisions, preferences, corrections, context) " +
+        "over knowledge derivable from files the agent can read anyway.\n" +
         "- Do not store transient task state, secrets, or credentials.\n" +
         "Facts are bi-temporal: recall's as_of answers what was believed at a past time, and " +
         "valid_from on remember/revise backdates when something became true in the world.",
@@ -58,10 +61,12 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
     "remember",
     {
       description:
-        "Store an atomic fact in long-term memory. Use for durable knowledge about the " +
-        "user, their projects, preferences, decisions, and environment — not transient " +
-        "task state. If this contradicts an existing belief, find it with recall and use " +
-        "revise instead. Always fill source_ref with where this came from (session, file, URL) if known.",
+        "Store ONE atomic fact in long-term memory — a single assertion, not a paragraph; " +
+        "split compound knowledge into multiple remember calls so each piece can be revised " +
+        "independently later. Use for durable knowledge about the user, their projects, " +
+        "preferences, decisions, and environment — not transient task state. If this " +
+        "contradicts an existing belief, find it with recall and use revise instead. Always " +
+        "fill source_ref with where this came from (session, file, URL) if known.",
       inputSchema: {
         subject: z.string().describe("What the fact is about, e.g. 'user' or 'project:memharness'"),
         fact: z.string().describe("The atomic statement itself"),
@@ -69,7 +74,15 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           .string()
           .optional()
           .describe("Optional relation type, e.g. 'prefers', 'works-on'"),
-        confidence: z.number().min(0).max(1).optional().describe("0..1, default 1.0"),
+        confidence: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(
+            "Calibrate: 1.0 only for user-stated or directly verified facts; " +
+              "0.6-0.8 for inferences and things read but not confirmed. Default 1.0",
+          ),
         source_ref: z
           .string()
           .optional()
@@ -92,7 +105,13 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           sourceAgent: args.source_agent ?? "mcp",
           validFrom: args.valid_from,
         });
-        return `Remembered as fact #${r.id}.`;
+        // In-result feedback steers models far better than upfront instructions.
+        const nudge =
+          args.fact.length > 280
+            ? " Note: that fact is long — next time split compound knowledge into separate " +
+              "remember calls so each piece can be revised independently."
+            : "";
+        return `Remembered as fact #${r.id}.${nudge}`;
       })(),
   );
 

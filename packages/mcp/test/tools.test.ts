@@ -100,6 +100,29 @@ describe("memharness MCP server", () => {
     expect(textOf(r)).toContain("no fact #99");
   });
 
+  it("nudges toward atomic facts when a remember is paragraph-sized", async () => {
+    const { client } = await connected();
+    const short = await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "drinks oolong tea" },
+    });
+    expect(textOf(short)).toBe("Remembered as fact #1.");
+
+    const long = await client.callTool({
+      name: "remember",
+      arguments: {
+        subject: "project:x",
+        fact:
+          "The project is a pnpm monorepo with two packages, uses Biome for linting and " +
+          "vitest for tests, targets Node 20.19 and above, is licensed Apache-2.0, stores " +
+          "data in SQLite via better-sqlite3, and deploys nowhere yet because it has not " +
+          "launched; the benchmark suite runs weekly in CI on ubuntu-latest runners.",
+      },
+    });
+    expect(textOf(long)).toContain("Remembered as fact #2.");
+    expect(textOf(long)).toContain("split compound knowledge");
+  });
+
   it("logs recall hit counts (zero-hit recalls are the miss signal)", async () => {
     const { client, usage, metas } = await connected();
     await client.callTool({ name: "recall", arguments: { query: "nothing stored yet" } });
