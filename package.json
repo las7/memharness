@@ -1,0 +1,21 @@
+{
+  "name": "memharness-monorepo",
+  "private": true,
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "packageManager": "pnpm@11.5.2",
+  "scripts": {
+    "lint": "biome ci .",
+    "format": "biome format --write .",
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:property": "pnpm --filter @memharness/core test:property",
+    "bench": "pnpm --filter @memharness/core bench"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4"
+  }
+}

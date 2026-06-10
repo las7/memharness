@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.db
+*.db-wal
+*.db-shm
+.memharness/
+bench-results.json
+.DS_Store

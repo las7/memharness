@@ -1,0 +1,35 @@
+{
+  "name": "@memharness/core",
+  "version": "0.1.0",
+  "description": "Bi-temporal, provenance-carrying memory primitive for AI agents. One SQLite file, zero LLM calls.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:property": "FC_NUM_RUNS=10000 vitest run test/property",
+    "bench": "node --import tsx bench/seed.ts && node --import tsx bench/recall-bench.ts --assert"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.0",
+    "fast-check": "^3.23.2",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  }
+}
