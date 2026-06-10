@@ -80,7 +80,7 @@ describe("recall (current beliefs)", () => {
     expect(result.facts.map((f) => f.id)).toContain(id);
   });
 
-  it("substring fallback still applies subject filter and excludes retracted/superseded", () => {
+  it("any-token stage still applies subject filter and excludes retracted/superseded", () => {
     const { mem } = openTestDb();
     const live = mem.remember({ subject: "a", fact: "contains zebraX marker" }).id;
     mem.remember({ subject: "b", fact: "contains zebraX marker too" });
@@ -89,11 +89,34 @@ describe("recall (current beliefs)", () => {
     const old = mem.remember({ subject: "a", fact: "stale zebraX note" }).id;
     mem.revise({ oldFactId: old, newFact: "fresh other note" });
 
-    // "zebraX mark" is not a token pair FTS matches ("mark" != "marker"), so this
-    // exercises the fallback path; filters must survive it.
-    const result = mem.recall({ query: "zebraX mark", subject: "a" });
-    expect(result.usedFallback).toBe(true);
+    // "qqq" matches no fact, so the all-tokens stage misses and the any-token
+    // stage answers via "zebraX"; filters must survive the escalation.
+    const result = mem.recall({ query: "zebraX qqq", subject: "a" });
+    expect(result.usedFallback).toBe(false);
     expect(ids(result)).toEqual([live]);
+  });
+
+  it("stems tokens: 'drink' finds 'drinks', 'own' finds 'owned'", () => {
+    const { mem } = openTestDb();
+    const a = mem.remember({ subject: "user", fact: "drinks oolong tea daily" }).id;
+    const b = mem.remember({ subject: "user", fact: "owned a kei truck once" }).id;
+    expect(ids(mem.recall({ query: "drink" }))).toEqual([a]);
+    const owned = mem.recall({ query: "own" });
+    expect(ids(owned)).toEqual([b]);
+    expect(owned.usedFallback).toBe(false);
+  });
+
+  it("finds a fact when only some query tokens appear (the dogfood miss)", () => {
+    const { mem } = openTestDb();
+    // Live regression from 2026-06-09: this fact was missed by the query
+    // "work employer company" under exact-token AND matching.
+    const id = mem.remember({
+      subject: "user",
+      fact: "Seiji's laptop is a company machine owned by Outerport, where he works",
+    }).id;
+    const result = mem.recall({ query: "work employer company" });
+    expect(result.facts.map((f) => f.id)).toContain(id);
+    expect(result.usedFallback).toBe(false);
   });
 
   it("escapes embedded double quotes so quoted text does not trigger fallback", () => {

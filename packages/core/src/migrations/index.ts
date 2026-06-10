@@ -1,8 +1,9 @@
 import type { Database } from "better-sqlite3";
 import { MemharnessError } from "../errors.js";
 import { m001 } from "./m001_initial.js";
+import { m002 } from "./m002_porter_fts.js";
 
-const MIGRATIONS: Array<(db: Database) => void> = [m001];
+const MIGRATIONS: Array<(db: Database) => void> = [m001, m002];
 
 /** Forward-only, user_version-driven. Returns the resulting schema version. */
 export function runMigrations(db: Database): number {

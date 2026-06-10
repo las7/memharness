@@ -20,7 +20,23 @@ function text(t: string): TextResult {
  * only (dogfood-gate instrumentation; never fact content).
  */
 export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}): McpServer {
-  const server = new McpServer({ name: "memharness", version: "0.1.0" });
+  const server = new McpServer(
+    { name: "memharness", version: "0.1.0" },
+    {
+      instructions:
+        "memharness is the agent's long-term memory. Use it proactively, not only when asked:\n" +
+        "- At the start of a task, recall relevant context (e.g. subject 'user' and the " +
+        "project being worked on) before answering questions that may depend on it.\n" +
+        "- When you learn a durable fact — a preference, decision, correction, or stable " +
+        "property of the user, a project, or the environment — call remember immediately, " +
+        "with source_ref set to where it came from.\n" +
+        "- When new information contradicts a stored belief, recall the old fact and use " +
+        "revise (not remember or forget) so history is preserved.\n" +
+        "- Do not store transient task state, secrets, or credentials.\n" +
+        "Facts are bi-temporal: recall's as_of answers what was believed at a past time, and " +
+        "valid_from on remember/revise backdates when something became true in the world.",
+    },
+  );
 
   const handle = (op: string, fn: () => string) => (): TextResult => {
     logUsage(op);

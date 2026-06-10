@@ -49,6 +49,31 @@ describe("open + migrations", () => {
     expect(() => Memharness.open({ dbPath })).toThrow(/newer/i);
   });
 
+  it("upgrades a v1 db in place: existing facts get the stemmed FTS index", async () => {
+    const dbPath = tempPath("memory.db");
+    const { default: Database } = await import("better-sqlite3");
+    const { m001 } = await import("../src/migrations/m001_initial.js");
+    const raw = new Database(dbPath);
+    m001(raw);
+    raw.pragma("user_version = 1");
+    raw
+      .prepare(
+        "INSERT INTO facts (subject, predicate, fact, confidence, valid_from, tx_at, source_agent, source_ref) " +
+          "VALUES ('user', '', 'works at Outerport', 1.0, '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z', '', '')",
+      )
+      .run();
+    raw.close();
+
+    const mem = Memharness.open({ dbPath });
+    expect(mem.stats().schemaVersion).toBe(2);
+    // 'work' only matches 'works' through the porter tokenizer added in m002
+    const result = mem.recall({ query: "work" });
+    expect(result.facts.map((f) => f.fact)).toEqual(["works at Outerport"]);
+    expect(result.usedFallback).toBe(false);
+    expect(() => mem.checkIntegrity()).not.toThrow();
+    mem.close();
+  });
+
   it("creates missing parent directories for the db path", () => {
     const dbPath = tempPath("nested", "deeper", "memory.db");
     const mem = Memharness.open({ dbPath });

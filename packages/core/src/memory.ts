@@ -78,12 +78,11 @@ function requireText(value: string | undefined, label: string): string {
 }
 
 /** Tokens wrapped as quoted FTS5 phrases, internal quotes doubled: never a syntax error. */
-function buildFtsMatch(query: string): string {
+function ftsPhrases(query: string): string[] {
   return query
     .split(/\s+/)
     .filter(Boolean)
-    .map((t) => `"${t.replaceAll('"', '""')}"`)
-    .join(" ");
+    .map((t) => `"${t.replaceAll('"', '""')}"`);
 }
 
 function buildLikePattern(query: string): string {
@@ -175,21 +174,27 @@ export class Memharness {
     let rows: Array<FactRow & { fts_rank: number | null; score: number }>;
     let usedFallback = false;
     if (query !== "") {
-      let ftsRows: typeof rows;
-      try {
-        ftsRows = this.prep(sql.recallQuery({ fts: true, filters })).all({
-          ...params,
-          match: buildFtsMatch(query),
-          rrfK: this.ranking.rrfK,
-        }) as typeof rows;
-      } catch {
-        ftsRows = [];
+      // Escalating match: all tokens → any token → substring. Each stage keeps
+      // every temporal/subject filter; only the text predicate loosens.
+      const phrases = ftsPhrases(query);
+      const matches = [phrases.join(" ")];
+      if (phrases.length > 1) matches.push(phrases.join(" OR "));
+      rows = [];
+      for (const match of matches) {
+        try {
+          rows = this.prep(sql.recallQuery({ fts: true, filters })).all({
+            ...params,
+            match,
+            rrfK: this.ranking.rrfK,
+          }) as typeof rows;
+        } catch {
+          rows = [];
+        }
+        if (rows.length > 0) break;
       }
-      if (ftsRows.length > 0) {
-        rows = ftsRows;
-      } else {
-        // FTS whiffed (partial word, punctuation-only, parser edge case):
-        // fall back to substring matching with all other filters intact.
+      if (rows.length === 0) {
+        // FTS whiffed entirely (partial word, punctuation-only, parser edge
+        // case): substring matching as the last resort.
         usedFallback = true;
         rows = this.prep(
           sql.recallQuery({ fts: false, filters: [...filters, sql.LIKE_FILTER] }),
