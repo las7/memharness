@@ -7,11 +7,15 @@ import { createServer } from "../src/server.js";
 async function connected() {
   const mem = Memharness.open({ dbPath: ":memory:", clock: new FakeClock() });
   const usage: string[] = [];
-  const server = createServer(mem, (op) => usage.push(op));
+  const metas: Array<Record<string, unknown> | undefined> = [];
+  const server = createServer(mem, (op, meta) => {
+    usage.push(op);
+    metas.push(meta);
+  });
   const client = new Client({ name: "test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  return { mem, client, usage };
+  return { mem, client, usage, metas };
 }
 
 function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
@@ -94,6 +98,22 @@ describe("memharness MCP server", () => {
     const r = await client.callTool({ name: "why", arguments: { fact_id: 99 } });
     expect(r.isError).toBe(true);
     expect(textOf(r)).toContain("no fact #99");
+  });
+
+  it("logs recall hit counts (zero-hit recalls are the miss signal)", async () => {
+    const { client, usage, metas } = await connected();
+    await client.callTool({ name: "recall", arguments: { query: "nothing stored yet" } });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "drinks oolong tea" },
+    });
+    await client.callTool({ name: "recall", arguments: { query: "oolong" } });
+
+    expect(usage).toEqual(["recall", "remember", "recall"]);
+    expect(metas[0]?.hits).toBe(0); // the observable memory miss
+    expect(metas[2]?.hits).toBe(1);
+    // meta carries counters only, never fact content
+    expect(JSON.stringify(metas)).not.toContain("oolong");
   });
 
   it("forget with no arguments asks for one", async () => {

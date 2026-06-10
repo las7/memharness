@@ -10,10 +10,10 @@ const mem = Memharness.open({ dbPath });
 
 // Dogfood-gate instrumentation: op name + timestamp only, locally, never content.
 const usageLog = dbPath === ":memory:" ? null : join(dirname(dbPath), "usage.log");
-const logUsage = (op: string): void => {
+const logUsage = (op: string, meta?: Record<string, unknown>): void => {
   if (usageLog === null) return;
   try {
-    appendFileSync(usageLog, `${JSON.stringify({ op, at: new Date().toISOString() })}\n`);
+    appendFileSync(usageLog, `${JSON.stringify({ op, at: new Date().toISOString(), ...meta })}\n`);
   } catch {
     // instrumentation must never break the server
   }

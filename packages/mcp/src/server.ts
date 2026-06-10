@@ -3,7 +3,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { fmtDiff, fmtRecall, fmtStats, fmtWhy } from "./format.js";
 
-export type UsageLogger = (op: string) => void;
+/** meta carries op-level counters (hit counts, flags) — never fact content. */
+export type UsageLogger = (op: string, meta?: Record<string, unknown>) => void;
 
 interface TextResult {
   content: Array<{ type: "text"; text: string }>;
@@ -38,17 +39,20 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
     },
   );
 
-  const handle = (op: string, fn: () => string) => (): TextResult => {
-    logUsage(op);
-    try {
-      return text(fn());
-    } catch (err) {
-      if (err instanceof MemharnessError) {
-        return { ...text(`Error: ${err.message}`), isError: true };
+  const handle =
+    (op: string, fn: () => string, meta?: () => Record<string, unknown>) => (): TextResult => {
+      try {
+        const out = text(fn());
+        logUsage(op, meta?.());
+        return out;
+      } catch (err) {
+        logUsage(op, { error: true });
+        if (err instanceof MemharnessError) {
+          return { ...text(`Error: ${err.message}`), isError: true };
+        }
+        throw err;
       }
-      throw err;
-    }
-  };
+    };
 
   server.registerTool(
     "remember",
@@ -116,18 +120,30 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           .describe("Token budget for the returned facts"),
       },
     },
-    (args) =>
-      handle("recall", () =>
-        fmtRecall(
-          mem.recall({
+    (args) => {
+      // hits/fallback/asOf land in the usage log: a zero-hit recall is the
+      // observable signature of a memory miss (or an empty db).
+      let last: { hits: number; fallback: boolean } | undefined;
+      return handle(
+        "recall",
+        () => {
+          const r = mem.recall({
             query: args.query,
             subject: args.subject,
             asOf: args.as_of,
             limit: args.limit,
             maxTokens: args.max_tokens,
-          }),
-        ),
-      )(),
+          });
+          last = { hits: r.facts.length, fallback: r.usedFallback };
+          return fmtRecall(r);
+        },
+        () => ({
+          hits: last?.hits,
+          fallback: last?.fallback || undefined,
+          asOf: args.as_of !== undefined || undefined,
+        }),
+      )();
+    },
   );
 
   server.registerTool(
