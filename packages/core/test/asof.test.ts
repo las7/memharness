@@ -7,10 +7,10 @@ import { ids, openTestDb } from "./helpers.js";
 
 describe("recall with asOf", () => {
   it("returns a fact learned before T even though it was later revised", () => {
-    const { mem } = openTestDb("2026-03-01T00:00:00.000Z");
+    const { mem, clock } = openTestDb("2026-03-01T00:00:00.000Z");
     const old = mem.remember({ subject: "user", fact: "lives in Osaka" }).id; // ~03-01
     const T = "2026-03-02T00:00:00.000Z";
-    // revision happens well after T
+    clock.advance(3 * 24 * 3600 * 1000); // revision happens 03-04, well after T
     const { newId } = mem.revise({ oldFactId: old, newFact: "lives in Tokyo" });
 
     const past = mem.recall({ asOf: T });

@@ -1,6 +1,17 @@
+import type { Database, Statement } from "better-sqlite3";
+import { SystemClock } from "./clock.js";
+import { openDatabase, resolveDefaultDbPath } from "./db.js";
+import { NotFoundError, ValidationError } from "./errors.js";
+import { runMigrations } from "./migrations/index.js";
+import { DEFAULT_RANKING, type ResolvedRankingOptions } from "./ranking.js";
+import * as sql from "./sql.js";
+import { normalizeIso } from "./time.js";
+import { estimateTokens } from "./tokens.js";
 import type {
+  Clock,
   DiffInput,
   DiffResult,
+  Fact,
   ForgetInput,
   ForgetResult,
   MemharnessOptions,
@@ -10,51 +21,309 @@ import type {
   RememberResult,
   ReviseInput,
   ReviseResult,
+  ScoredFact,
   StatsResult,
   WhyResult,
 } from "./types.js";
 
-const NOT_IMPLEMENTED = "not implemented";
+interface FactRow {
+  id: number;
+  subject: string;
+  predicate: string;
+  fact: string;
+  confidence: number;
+  valid_from: string;
+  valid_to: string | null;
+  tx_at: string;
+  superseded_by: number | null;
+  source_agent: string;
+  source_ref: string;
+  retracted_at: string | null;
+}
+
+function rowToFact(row: FactRow): Fact {
+  return {
+    id: row.id,
+    subject: row.subject,
+    predicate: row.predicate,
+    fact: row.fact,
+    confidence: row.confidence,
+    validFrom: row.valid_from,
+    validTo: row.valid_to,
+    txAt: row.tx_at,
+    supersededBy: row.superseded_by,
+    sourceAgent: row.source_agent,
+    sourceRef: row.source_ref,
+    retractedAt: row.retracted_at,
+  };
+}
+
+function checkConfidence(confidence: number | undefined): number {
+  if (confidence === undefined) return 1.0;
+  if (
+    typeof confidence !== "number" ||
+    Number.isNaN(confidence) ||
+    confidence < 0 ||
+    confidence > 1
+  ) {
+    throw new ValidationError(`confidence must be in [0, 1], got ${confidence}`);
+  }
+  return confidence;
+}
+
+function requireText(value: string | undefined, label: string): string {
+  const trimmed = (value ?? "").trim();
+  if (trimmed === "") throw new ValidationError(`${label} must be a non-empty string`);
+  return trimmed;
+}
+
+/** Tokens wrapped as quoted FTS5 phrases, internal quotes doubled: never a syntax error. */
+function buildFtsMatch(query: string): string {
+  return query
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((t) => `"${t.replaceAll('"', '""')}"`)
+    .join(" ");
+}
+
+function buildLikePattern(query: string): string {
+  return `%${query.replaceAll(/[\\%_]/g, (m) => `\\${m}`)}%`;
+}
 
 export class Memharness {
-  static open(_opts?: MemharnessOptions): Memharness {
-    throw new Error(NOT_IMPLEMENTED);
+  private readonly db: Database;
+  private readonly clock: Clock;
+  private readonly ranking: ResolvedRankingOptions;
+  private readonly dbPath: string;
+  private readonly schemaVersion: number;
+  private readonly stmts = new Map<string, Statement>();
+
+  private constructor(db: Database, dbPath: string, clock: Clock, ranking: ResolvedRankingOptions) {
+    this.db = db;
+    this.dbPath = dbPath;
+    this.clock = clock;
+    this.ranking = ranking;
+    this.schemaVersion = runMigrations(db);
   }
 
-  remember(_input: RememberInput): RememberResult {
-    throw new Error(NOT_IMPLEMENTED);
+  static open(opts: MemharnessOptions = {}): Memharness {
+    const dbPath = opts.dbPath ?? resolveDefaultDbPath();
+    const db = openDatabase(dbPath);
+    const ranking: ResolvedRankingOptions = {
+      halfLifeDays: opts.ranking?.halfLifeDays ?? DEFAULT_RANKING.halfLifeDays,
+      rrfK: opts.ranking?.rrfK ?? DEFAULT_RANKING.rrfK,
+    };
+    return new Memharness(db, dbPath, opts.clock ?? new SystemClock(), ranking);
   }
 
-  recall(_input?: RecallInput): RecallResult {
-    throw new Error(NOT_IMPLEMENTED);
+  private prep(sqlText: string): Statement {
+    let stmt = this.stmts.get(sqlText);
+    if (stmt === undefined) {
+      stmt = this.db.prepare(sqlText);
+      this.stmts.set(sqlText, stmt);
+    }
+    return stmt;
   }
 
-  revise(_input: ReviseInput): ReviseResult {
-    throw new Error(NOT_IMPLEMENTED);
+  remember(input: RememberInput): RememberResult {
+    const subject = requireText(input.subject, "subject");
+    const fact = requireText(input.fact, "fact");
+    const confidence = checkConfidence(input.confidence);
+    const txAt = this.clock.now();
+    const validFrom =
+      input.validFrom !== undefined ? normalizeIso(input.validFrom, "validFrom") : txAt;
+    const result = this.prep(sql.INSERT_FACT).run({
+      subject,
+      predicate: (input.predicate ?? "").trim(),
+      fact,
+      confidence,
+      validFrom,
+      txAt,
+      sourceAgent: input.sourceAgent ?? "",
+      sourceRef: input.sourceRef ?? "",
+    });
+    return { id: Number(result.lastInsertRowid), txAt };
   }
 
-  diff(_input: DiffInput): DiffResult {
-    throw new Error(NOT_IMPLEMENTED);
+  recall(input: RecallInput = {}): RecallResult {
+    const query = (input.query ?? "").trim();
+    const subject = (input.subject ?? "").trim();
+    const limit = input.limit ?? 8;
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new ValidationError(`limit must be a positive integer, got ${limit}`);
+    }
+    if (
+      input.maxTokens !== undefined &&
+      (!Number.isInteger(input.maxTokens) || input.maxTokens < 1)
+    ) {
+      throw new ValidationError(`maxTokens must be a positive integer, got ${input.maxTokens}`);
+    }
+    const asOf = input.asOf !== undefined ? normalizeIso(input.asOf, "asOf") : null;
+
+    const filters: string[] = [asOf !== null ? sql.AS_OF_FILTER : sql.CURRENT_FILTER];
+    const params: Record<string, unknown> = {
+      now: this.clock.now(),
+      halfLifeDays: this.ranking.halfLifeDays,
+      limit,
+    };
+    if (asOf !== null) params.asOf = asOf;
+    if (subject !== "") {
+      filters.push(sql.SUBJECT_FILTER);
+      params.subject = subject;
+    }
+
+    let rows: Array<FactRow & { fts_rank: number | null; score: number }>;
+    let usedFallback = false;
+    if (query !== "") {
+      let ftsRows: typeof rows;
+      try {
+        ftsRows = this.prep(sql.recallQuery({ fts: true, filters })).all({
+          ...params,
+          match: buildFtsMatch(query),
+          rrfK: this.ranking.rrfK,
+        }) as typeof rows;
+      } catch {
+        ftsRows = [];
+      }
+      if (ftsRows.length > 0) {
+        rows = ftsRows;
+      } else {
+        // FTS whiffed (partial word, punctuation-only, parser edge case):
+        // fall back to substring matching with all other filters intact.
+        usedFallback = true;
+        rows = this.prep(
+          sql.recallQuery({ fts: false, filters: [...filters, sql.LIKE_FILTER] }),
+        ).all({
+          ...params,
+          pattern: buildLikePattern(query),
+        }) as typeof rows;
+      }
+    } else {
+      rows = this.prep(sql.recallQuery({ fts: false, filters })).all(params) as typeof rows;
+    }
+
+    const facts: ScoredFact[] = [];
+    let truncated = false;
+    let budget = input.maxTokens ?? Number.POSITIVE_INFINITY;
+    for (const row of rows) {
+      const cost = estimateTokens([row.subject, row.predicate, row.fact].filter(Boolean).join(" "));
+      if (cost > budget) {
+        truncated = true;
+        break;
+      }
+      budget -= cost;
+      facts.push({ ...rowToFact(row), score: row.score });
+    }
+    return { facts, asOf, truncated, usedFallback };
   }
 
-  why(_factId: number): WhyResult {
-    throw new Error(NOT_IMPLEMENTED);
+  revise(input: ReviseInput): ReviseResult {
+    const newFact = requireText(input.newFact, "newFact");
+    const confidence = checkConfidence(input.confidence);
+    const run = this.db.transaction((): ReviseResult => {
+      const old = this.prep(sql.GET_FACT).get(input.oldFactId) as FactRow | undefined;
+      if (old === undefined) throw new NotFoundError(`no fact #${input.oldFactId}`);
+      if (old.superseded_by !== null) {
+        throw new ValidationError(
+          `fact #${old.id} is already superseded by #${old.superseded_by}; revise the head of the chain`,
+        );
+      }
+      const txAt = this.clock.now();
+      const validFrom =
+        input.validFrom !== undefined ? normalizeIso(input.validFrom, "validFrom") : txAt;
+      const inserted = this.prep(sql.INSERT_FACT).run({
+        subject: old.subject,
+        predicate: old.predicate,
+        fact: newFact,
+        confidence,
+        validFrom,
+        txAt,
+        sourceAgent: input.sourceAgent ?? "",
+        sourceRef: input.sourceRef ?? "",
+      });
+      const newId = Number(inserted.lastInsertRowid);
+      this.prep(sql.SUPERSEDE_FACT).run({ ts: txAt, newId, oldId: old.id });
+      return { oldId: old.id, newId, txAt };
+    });
+    return run();
   }
 
-  forget(_input: ForgetInput): ForgetResult {
-    throw new Error(NOT_IMPLEMENTED);
+  diff(input: DiffInput): DiffResult {
+    const since = normalizeIso(input.since, "since");
+    const subject = (input.subject ?? "").trim() || null;
+    const params = { since, subject };
+    const learned = (this.prep(sql.DIFF_LEARNED).all(params) as FactRow[]).map(rowToFact);
+    const revised = (this.prep(sql.DIFF_REVISED).all(params) as FactRow[]).map((row) => {
+      const successor = this.prep(sql.GET_FACT).get(row.superseded_by) as FactRow | undefined;
+      return { old: rowToFact(row), new: successor !== undefined ? rowToFact(successor) : null };
+    });
+    const retracted = (this.prep(sql.DIFF_RETRACTED).all(params) as FactRow[]).map(rowToFact);
+    return { since, learned, revised, retracted };
+  }
+
+  why(factId: number): WhyResult {
+    const row = this.prep(sql.GET_FACT).get(factId) as FactRow | undefined;
+    if (row === undefined) throw new NotFoundError(`no fact #${factId}`);
+
+    const ancestors: Fact[] = [];
+    let prev = this.prep(sql.GET_PREDECESSOR).get(factId) as FactRow | undefined;
+    while (prev !== undefined) {
+      ancestors.push(rowToFact(prev));
+      prev = this.prep(sql.GET_PREDECESSOR).get(prev.id) as FactRow | undefined;
+    }
+
+    const descendants: Fact[] = [];
+    let cursor = row;
+    while (cursor.superseded_by !== null) {
+      const next = this.prep(sql.GET_FACT).get(cursor.superseded_by) as FactRow | undefined;
+      if (next === undefined) break;
+      descendants.push(rowToFact(next));
+      cursor = next;
+    }
+    return { fact: rowToFact(row), ancestors, descendants };
+  }
+
+  forget(input: ForgetInput): ForgetResult {
+    const ts = this.clock.now();
+    let rows: Array<{ id: number }>;
+    if (typeof input.factId === "number") {
+      rows = this.prep(sql.RETRACT_BY_ID).all({ ts, id: input.factId }) as Array<{ id: number }>;
+    } else if (typeof input.sourceRef === "string") {
+      const sourceRef = input.sourceRef.trim();
+      if (sourceRef === "") {
+        throw new ValidationError("sourceRef must be non-empty (refusing to retract everything)");
+      }
+      rows = this.prep(sql.RETRACT_BY_SOURCE_REF).all({ ts, sourceRef }) as Array<{ id: number }>;
+    } else {
+      throw new ValidationError("forget needs a factId or a sourceRef");
+    }
+    const retractedIds = rows.map((r) => r.id);
+    return { retractedCount: retractedIds.length, retractedIds };
   }
 
   stats(): StatsResult {
-    throw new Error(NOT_IMPLEMENTED);
+    const total = this.prep(sql.STATS_TOTAL).get() as { c: number };
+    const current = this.prep(sql.STATS_CURRENT).get() as { c: number };
+    const top = this.prep(sql.STATS_TOP_SUBJECTS).all() as Array<{ subject: string; c: number }>;
+    return {
+      dbPath: this.dbPath,
+      totalFacts: total.c,
+      currentBeliefs: current.c,
+      topSubjects: top.map((r) => ({ subject: r.subject, count: r.c })),
+      schemaVersion: this.schemaVersion,
+    };
   }
 
   /** Verifies FTS index consistency and foreign keys; throws on corruption. */
   checkIntegrity(): void {
-    throw new Error(NOT_IMPLEMENTED);
+    this.db.exec(sql.FTS_INTEGRITY_CHECK);
+    const broken = this.db.pragma("foreign_key_check") as unknown[];
+    if (broken.length > 0) {
+      throw new Error(`foreign_key_check found ${broken.length} violation(s)`);
+    }
   }
 
   close(): void {
-    throw new Error(NOT_IMPLEMENTED);
+    this.db.close();
   }
 }

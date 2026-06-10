@@ -1,4 +1,4 @@
 /** Rough token estimate: ceil(chars / 4). */
 export function estimateTokens(text: string): number {
-  throw new Error("not implemented");
+  return Math.ceil(text.length / 4);
 }
