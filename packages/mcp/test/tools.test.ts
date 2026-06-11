@@ -4,14 +4,18 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
 import { createServer } from "../src/server.js";
 
-async function connected() {
+async function connected(embedQuery?: (text: string) => Promise<Float32Array>) {
   const mem = Memharness.open({ dbPath: ":memory:", clock: new FakeClock() });
   const usage: string[] = [];
   const metas: Array<Record<string, unknown> | undefined> = [];
-  const server = createServer(mem, (op, meta) => {
-    usage.push(op);
-    metas.push(meta);
-  });
+  const server = createServer(
+    mem,
+    (op, meta) => {
+      usage.push(op);
+      metas.push(meta);
+    },
+    embedQuery,
+  );
   const client = new Client({ name: "test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -204,6 +208,23 @@ describe("memharness MCP server", () => {
     });
     expect(mem.why(3).fact.importance).toBe(9);
     expect(mem.why(3).fact.kind).toBe("semantic");
+  });
+
+  it("runs hybrid recall when a query embedder is wired (vector finds what FTS misses)", async () => {
+    // synthetic embedder — no model: "tea"-ish queries point at the tea vector
+    const embed = async (text: string): Promise<Float32Array> =>
+      Float32Array.from(/tea|beverage|drink/i.test(text) ? [1, 0, 0] : [0, 1, 0]);
+    const { mem, client, metas } = await connected(embed);
+
+    const a = mem.remember({ subject: "user", fact: "drinks oolong" }).id;
+    const b = mem.remember({ subject: "user", fact: "deploys on fridays" }).id;
+    mem.setEmbedding(a, [1, 0, 0], "test");
+    mem.setEmbedding(b, [0, 1, 0], "test");
+
+    // "beverage" lexically matches neither fact; the vector leg still finds "oolong"
+    const r = await client.callTool({ name: "recall", arguments: { query: "beverage" } });
+    expect(textOf(r)).toContain("drinks oolong");
+    expect(metas.at(-1)?.hybrid).toBe(true);
   });
 
   it("forget with no arguments asks for one", async () => {

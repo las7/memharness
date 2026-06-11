@@ -180,6 +180,22 @@ export class Memharness {
     return (this.prep(sql.COUNT_EMBEDDED).get() as { c: number }).c;
   }
 
+  /** Facts lacking a current-model embedding, oldest first — the reembed backfill work-list. */
+  embedTargets(
+    model: string,
+    limit: number,
+  ): Array<{ id: number; subject: string; predicate: string; fact: string }> {
+    return this.prep(sql.EMBED_TARGETS).all({
+      model: requireText(model, "model"),
+      limit,
+    }) as Array<{
+      id: number;
+      subject: string;
+      predicate: string;
+      fact: string;
+    }>;
+  }
+
   private prep(sqlText: string): Statement {
     let stmt = this.stmts.get(sqlText);
     if (stmt === undefined) {

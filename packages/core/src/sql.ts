@@ -85,6 +85,11 @@ export const SET_EMBEDDING =
 
 export const COUNT_EMBEDDED = "SELECT COUNT(*) AS c FROM facts WHERE embedding IS NOT NULL";
 
+/** Facts lacking a current-model embedding (oldest first) — the reembed backfill work-list. */
+export const EMBED_TARGETS = `SELECT id, subject, predicate, fact FROM facts
+WHERE embedding IS NULL OR embedding_model IS NULL OR embedding_model != @model
+ORDER BY id LIMIT @limit`;
+
 /**
  * Hybrid recall: RRF-fuse an FTS rank list and a vector-KNN rank list, then
  * apply confidence × importance × decay. Either leg may be absent (a fact

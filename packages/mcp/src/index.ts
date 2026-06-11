@@ -19,5 +19,17 @@ const logUsage = (op: string, meta?: Record<string, unknown>): void => {
   }
 };
 
-const server = createServer(mem, logUsage);
+// Hybrid recall is opt-in (MEMHARNESS_HYBRID=1): it lazy-loads a ~130MB local
+// embedding model into the server process, so the default stays lightweight.
+let embedQuery: ((text: string) => Promise<Float32Array>) | undefined;
+if (process.env.MEMHARNESS_HYBRID === "1") {
+  try {
+    const embed = await import("@memharness/embed");
+    embedQuery = (text: string) => embed.embedQuery(text);
+  } catch {
+    // embed package or model unavailable → recall stays FTS-only
+  }
+}
+
+const server = createServer(mem, logUsage, embedQuery);
 await server.connect(new StdioServerTransport());

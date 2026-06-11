@@ -4,3 +4,6 @@ allowBuilds:
   "@biomejs/biome": true
   better-sqlite3: true
   esbuild: true
+  onnxruntime-node: true
+  protobufjs: true
+  sharp: false

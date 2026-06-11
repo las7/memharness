@@ -1,16 +1,11 @@
 {
-  "name": "@memharness/mcp",
+  "name": "@memharness/embed",
   "version": "0.1.0",
-  "description": "MCP server exposing memharness bi-temporal agent memory: remember, recall, revise, diff, why, forget, stats.",
+  "description": "Local, offline-after-download text embeddings for memharness hybrid recall. Lives outside @memharness/core so the storage write path stays model-free (I5).",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
     "node": ">=20.19"
-  },
-  "bin": {
-    "memharness-mcp": "dist/index.js",
-    "memharness-context": "dist/context.js",
-    "memharness-reembed": "dist/reembed.js"
   },
   "exports": {
     ".": {
@@ -25,10 +20,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@memharness/core": "workspace:*",
-    "@memharness/embed": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "zod": "^3.24.0"
+    "@huggingface/transformers": "^3.8.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

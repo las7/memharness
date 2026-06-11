@@ -6,6 +6,9 @@ import { fmtDiff, fmtRecall, fmtStats, fmtWhy } from "./format.js";
 /** meta carries op-level counters (hit counts, flags) — never fact content. */
 export type UsageLogger = (op: string, meta?: Record<string, unknown>) => void;
 
+/** Optional query embedder; when supplied, recall runs hybrid (FTS + vector). */
+export type QueryEmbedder = (text: string) => Promise<Float32Array>;
+
 interface TextResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
@@ -31,7 +34,11 @@ const BASIS_CONFIDENCE = {
  * Wraps a Memharness instance as an MCP server. logUsage receives the op name
  * only (dogfood-gate instrumentation; never fact content).
  */
-export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}): McpServer {
+export function createServer(
+  mem: Memharness,
+  logUsage: UsageLogger = () => {},
+  embedQuery?: QueryEmbedder,
+): McpServer {
   const server = new McpServer(
     { name: "memharness", version: "0.1.0" },
     {
@@ -185,10 +192,20 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           .describe("Token budget for the returned facts"),
       },
     },
-    (args) => {
+    async (args) => {
       // hits/fallback/asOf land in the usage log: a zero-hit recall is the
       // observable signature of a memory miss (or an empty db).
       let last: { hits: number; fallback: boolean } | undefined;
+      // Embed the query for hybrid recall when an embedder is wired and there's
+      // text to embed. Failure (model missing, etc.) silently degrades to FTS.
+      let queryVector: Float32Array | undefined;
+      if (embedQuery && args.query !== undefined && args.query.trim() !== "") {
+        try {
+          queryVector = await embedQuery(args.query);
+        } catch {
+          queryVector = undefined;
+        }
+      }
       return handle(
         "recall",
         () => {
@@ -199,6 +216,7 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
             asOf: args.as_of,
             limit: args.limit,
             maxTokens: args.max_tokens,
+            queryVector,
           });
           last = { hits: r.facts.length, fallback: r.usedFallback };
           return fmtRecall(r);
@@ -207,6 +225,7 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           hits: last?.hits,
           fallback: last?.fallback || undefined,
           asOf: args.as_of !== undefined || undefined,
+          hybrid: queryVector !== undefined || undefined,
         }),
       )();
     },
