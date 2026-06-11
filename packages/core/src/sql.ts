@@ -79,6 +79,53 @@ LIMIT @limit`;
 export const REINFORCE_ACCESS =
   "UPDATE facts SET last_accessed_at = ? WHERE id IN (SELECT value FROM json_each(?))";
 
+/** Attach a vector to a fact (cold backfill; never the write path). */
+export const SET_EMBEDDING =
+  "UPDATE facts SET embedding = @embedding, embedding_dim = @dim, embedding_model = @model WHERE id = @id";
+
+export const COUNT_EMBEDDED = "SELECT COUNT(*) AS c FROM facts WHERE embedding IS NOT NULL";
+
+/**
+ * Hybrid recall: RRF-fuse an FTS rank list and a vector-KNN rank list, then
+ * apply confidence × importance × decay. Either leg may be absent (a fact
+ * present in only one list still scores). The vector CTE brute-forces cosine
+ * distance over embedded rows of the matching dimension. Filters apply to the
+ * outer rows; the existing recallQuery still serves the rank-free / LIKE paths.
+ */
+export function hybridRecallQuery(opts: { fts: boolean; vec: boolean; filters: string[] }): string {
+  const ctes: string[] = [];
+  if (opts.fts) {
+    ctes.push(
+      "fts AS (SELECT rowid AS id, row_number() OVER (ORDER BY rank) AS r " +
+        "FROM facts_fts WHERE facts_fts MATCH @match)",
+    );
+  }
+  if (opts.vec) {
+    ctes.push(
+      "vec AS (SELECT id, row_number() OVER (ORDER BY vec_distance_cosine(embedding, @queryVec)) AS r " +
+        "FROM facts WHERE embedding IS NOT NULL AND embedding_dim = @queryDim)",
+    );
+  }
+  const ftsRrf = opts.fts ? "(CASE WHEN fts.id IS NULL THEN 0 ELSE 1.0/(@rrfK + fts.r) END)" : "0";
+  const vecRrf = opts.vec ? "(CASE WHEN vec.id IS NULL THEN 0 ELSE 1.0/(@rrfK + vec.r) END)" : "0";
+  const presence = [opts.fts ? "fts.id IS NOT NULL" : null, opts.vec ? "vec.id IS NOT NULL" : null]
+    .filter(Boolean)
+    .join(" OR ");
+  const joins = [
+    opts.fts ? "LEFT JOIN fts ON fts.id = f.id" : "",
+    opts.vec ? "LEFT JOIN vec ON vec.id = f.id" : "",
+  ].join(" ");
+  const where = [`(${presence})`, ...opts.filters].join(" AND ");
+  return `
+WITH ${ctes.join(",\n")}
+SELECT f.*, ${opts.fts ? "fts.r" : "NULL"} AS fts_rank, ${opts.vec ? "vec.r" : "NULL"} AS vec_rank,
+       (${ftsRrf} + ${vecRrf}) * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} AS score
+FROM facts f ${joins}
+WHERE ${where}
+ORDER BY score DESC, f.tx_at DESC, f.id DESC
+LIMIT @limit`;
+}
+
 export const DIFF_LEARNED = `SELECT * FROM facts f
 WHERE f.tx_at >= @since AND f.superseded_by IS NULL AND f.retracted_at IS NULL
   AND (@subject IS NULL OR f.subject = @subject)

@@ -1,6 +1,6 @@
 import type { Database, Statement } from "better-sqlite3";
 import { SystemClock } from "./clock.js";
-import { openDatabase, resolveDefaultDbPath } from "./db.js";
+import { loadVecExtension, openDatabase, resolveDefaultDbPath } from "./db.js";
 import { NotFoundError, ValidationError } from "./errors.js";
 import { runMigrations } from "./migrations/index.js";
 import { DEFAULT_RANKING, MIN_HALFLIFE_FACTOR, type ResolvedRankingOptions } from "./ranking.js";
@@ -114,25 +114,41 @@ function buildLikePattern(query: string): string {
   return `%${query.replaceAll(/[\\%_]/g, (m) => `\\${m}`)}%`;
 }
 
+/** Pack a float vector into a little-endian Float32 BLOB for sqlite-vec, with its dimension. */
+function toVecBlob(vector: Float32Array | number[]): { blob: Buffer; dim: number } {
+  const f32 = vector instanceof Float32Array ? vector : Float32Array.from(vector);
+  return { blob: Buffer.from(f32.buffer, f32.byteOffset, f32.byteLength), dim: f32.length };
+}
+
 export class Memharness {
   private readonly db: Database;
   private readonly clock: Clock;
   private readonly ranking: ResolvedRankingOptions;
   private readonly dbPath: string;
   private readonly schemaVersion: number;
+  /** Whether sqlite-vec loaded; false → recall is FTS-only. */
+  readonly vecEnabled: boolean;
   private readonly stmts = new Map<string, Statement>();
 
-  private constructor(db: Database, dbPath: string, clock: Clock, ranking: ResolvedRankingOptions) {
+  private constructor(
+    db: Database,
+    dbPath: string,
+    clock: Clock,
+    ranking: ResolvedRankingOptions,
+    vecEnabled: boolean,
+  ) {
     this.db = db;
     this.dbPath = dbPath;
     this.clock = clock;
     this.ranking = ranking;
+    this.vecEnabled = vecEnabled;
     this.schemaVersion = runMigrations(db);
   }
 
   static open(opts: MemharnessOptions = {}): Memharness {
     const dbPath = opts.dbPath ?? resolveDefaultDbPath();
     const db = openDatabase(dbPath);
+    const vecEnabled = loadVecExtension(db);
     const ranking: ResolvedRankingOptions = {
       halfLifeDays: opts.ranking?.halfLifeDays ?? DEFAULT_RANKING.halfLifeDays,
       rrfK: opts.ranking?.rrfK ?? DEFAULT_RANKING.rrfK,
@@ -144,7 +160,24 @@ export class Memharness {
         ...opts.ranking?.kindHalfLifeDays,
       },
     };
-    return new Memharness(db, dbPath, opts.clock ?? new SystemClock(), ranking);
+    return new Memharness(db, dbPath, opts.clock ?? new SystemClock(), ranking, vecEnabled);
+  }
+
+  /**
+   * Attach an embedding to a fact for hybrid recall. Computed out-of-band (a
+   * reembed pass), never in remember/revise — keeps the write path model-free
+   * (I5). No-op-safe to call repeatedly; overwrites the prior vector.
+   */
+  setEmbedding(id: number, vector: Float32Array | number[], model: string): void {
+    const { blob, dim } = toVecBlob(vector);
+    if (dim < 1) throw new ValidationError("embedding vector must be non-empty");
+    const m = requireText(model, "model");
+    this.prep(sql.SET_EMBEDDING).run({ id, embedding: blob, dim, model: m });
+  }
+
+  /** Count of facts that currently carry an embedding (for reembed progress). */
+  embeddedCount(): number {
+    return (this.prep(sql.COUNT_EMBEDDED).get() as { c: number }).c;
   }
 
   private prep(sqlText: string): Statement {
@@ -218,9 +251,35 @@ export class Memharness {
       params.kind = kind;
     }
 
+    const vec = this.vecEnabled && input.queryVector !== undefined && input.queryVector.length > 0;
+
     let rows: Array<FactRow & { fts_rank: number | null; score: number }>;
     let usedFallback = false;
-    if (query !== "") {
+    if (vec) {
+      // Hybrid: RRF-fuse FTS (lexical) and vector KNN (semantic). The FTS leg is
+      // included whenever there's also a text query, so facts not yet embedded
+      // still surface lexically; the vector leg backstops paraphrase.
+      const { blob, dim } = toVecBlob(input.queryVector as Float32Array | number[]);
+      const vecParams = { ...params, rrfK: this.ranking.rrfK, queryVec: blob, queryDim: dim };
+      if (query !== "") {
+        const match = ftsPhrases(query).join(" OR ");
+        try {
+          rows = this.prep(sql.hybridRecallQuery({ fts: true, vec: true, filters })).all({
+            ...vecParams,
+            match,
+          }) as typeof rows;
+        } catch {
+          // FTS parse edge case → vector only
+          rows = this.prep(sql.hybridRecallQuery({ fts: false, vec: true, filters })).all(
+            vecParams,
+          ) as typeof rows;
+        }
+      } else {
+        rows = this.prep(sql.hybridRecallQuery({ fts: false, vec: true, filters })).all(
+          vecParams,
+        ) as typeof rows;
+      }
+    } else if (query !== "") {
       // Escalating match: all tokens → any token → substring. Each stage keeps
       // every temporal/subject filter; only the text predicate loosens.
       const phrases = ftsPhrases(query);

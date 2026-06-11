@@ -78,6 +78,8 @@ export interface RecallInput {
   subject?: string;
   /** Restrict to one memory kind. */
   kind?: MemoryKind;
+  /** Query embedding for hybrid recall. Fused with FTS via RRF; ignored if sqlite-vec is unavailable. */
+  queryVector?: Float32Array | number[];
   /** ISO date or datetime. Returns beliefs as held at that instant. */
   asOf?: string;
   /** Max facts returned. Default 8. */

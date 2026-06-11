@@ -65,7 +65,7 @@ describe("open + migrations", () => {
     raw.close();
 
     const mem = Memharness.open({ dbPath });
-    expect(mem.stats().schemaVersion).toBe(3);
+    expect(mem.stats().schemaVersion).toBe(4);
     // 'work' only matches 'works' through the porter tokenizer added in m002
     const result = mem.recall({ query: "work" });
     expect(result.facts.map((f) => f.fact)).toEqual(["works at Outerport"]);
@@ -92,7 +92,7 @@ describe("open + migrations", () => {
     raw.close();
 
     const mem = Memharness.open({ dbPath });
-    expect(mem.stats().schemaVersion).toBe(3);
+    expect(mem.stats().schemaVersion).toBe(4);
     mem.close();
 
     const check = new Database(dbPath);
