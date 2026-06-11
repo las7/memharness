@@ -3,7 +3,7 @@ import { SystemClock } from "./clock.js";
 import { openDatabase, resolveDefaultDbPath } from "./db.js";
 import { NotFoundError, ValidationError } from "./errors.js";
 import { runMigrations } from "./migrations/index.js";
-import { DEFAULT_RANKING, type ResolvedRankingOptions } from "./ranking.js";
+import { DEFAULT_RANKING, MIN_HALFLIFE_FACTOR, type ResolvedRankingOptions } from "./ranking.js";
 import * as sql from "./sql.js";
 import { normalizeIso } from "./time.js";
 import { estimateTokens } from "./tokens.js";
@@ -15,6 +15,7 @@ import type {
   ForgetInput,
   ForgetResult,
   MemharnessOptions,
+  MemoryKind,
   RecallInput,
   RecallResult,
   RememberInput,
@@ -32,6 +33,8 @@ interface FactRow {
   predicate: string;
   fact: string;
   confidence: number;
+  importance: number;
+  kind: MemoryKind;
   valid_from: string;
   valid_to: string | null;
   tx_at: string;
@@ -39,6 +42,7 @@ interface FactRow {
   source_agent: string;
   source_ref: string;
   retracted_at: string | null;
+  last_accessed_at: string | null;
 }
 
 function rowToFact(row: FactRow): Fact {
@@ -48,6 +52,8 @@ function rowToFact(row: FactRow): Fact {
     predicate: row.predicate,
     fact: row.fact,
     confidence: row.confidence,
+    importance: row.importance,
+    kind: row.kind,
     validFrom: row.valid_from,
     validTo: row.valid_to,
     txAt: row.tx_at,
@@ -55,6 +61,7 @@ function rowToFact(row: FactRow): Fact {
     sourceAgent: row.source_agent,
     sourceRef: row.source_ref,
     retractedAt: row.retracted_at,
+    lastAccessedAt: row.last_accessed_at,
   };
 }
 
@@ -69,6 +76,24 @@ function checkConfidence(confidence: number | undefined): number {
     throw new ValidationError(`confidence must be in [0, 1], got ${confidence}`);
   }
   return confidence;
+}
+
+function checkImportance(importance: number | undefined, fallback: number): number {
+  if (importance === undefined) return fallback;
+  if (!Number.isInteger(importance) || importance < 1 || importance > 10) {
+    throw new ValidationError(`importance must be an integer in [1, 10], got ${importance}`);
+  }
+  return importance;
+}
+
+const KINDS: readonly MemoryKind[] = ["semantic", "episodic", "procedural"];
+
+function checkKind(kind: MemoryKind | undefined, fallback: MemoryKind): MemoryKind {
+  if (kind === undefined) return fallback;
+  if (!KINDS.includes(kind)) {
+    throw new ValidationError(`kind must be one of ${KINDS.join(", ")}, got ${kind}`);
+  }
+  return kind;
 }
 
 function requireText(value: string | undefined, label: string): string {
@@ -111,6 +136,13 @@ export class Memharness {
     const ranking: ResolvedRankingOptions = {
       halfLifeDays: opts.ranking?.halfLifeDays ?? DEFAULT_RANKING.halfLifeDays,
       rrfK: opts.ranking?.rrfK ?? DEFAULT_RANKING.rrfK,
+      importanceWeight: opts.ranking?.importanceWeight ?? DEFAULT_RANKING.importanceWeight,
+      importanceHalfLifeWeight:
+        opts.ranking?.importanceHalfLifeWeight ?? DEFAULT_RANKING.importanceHalfLifeWeight,
+      kindHalfLifeDays: {
+        ...DEFAULT_RANKING.kindHalfLifeDays,
+        ...opts.ranking?.kindHalfLifeDays,
+      },
     };
     return new Memharness(db, dbPath, opts.clock ?? new SystemClock(), ranking);
   }
@@ -128,6 +160,8 @@ export class Memharness {
     const subject = requireText(input.subject, "subject");
     const fact = requireText(input.fact, "fact");
     const confidence = checkConfidence(input.confidence);
+    const importance = checkImportance(input.importance, 5);
+    const kind = checkKind(input.kind, "semantic");
     const txAt = this.clock.now();
     const validFrom =
       input.validFrom !== undefined ? normalizeIso(input.validFrom, "validFrom") : txAt;
@@ -136,6 +170,8 @@ export class Memharness {
       predicate: (input.predicate ?? "").trim(),
       fact,
       confidence,
+      importance,
+      kind,
       validFrom,
       txAt,
       sourceAgent: input.sourceAgent ?? "",
@@ -159,16 +195,27 @@ export class Memharness {
     }
     const asOf = input.asOf !== undefined ? normalizeIso(input.asOf, "asOf") : null;
 
+    const kind = input.kind !== undefined ? checkKind(input.kind, "semantic") : null;
+
     const filters: string[] = [asOf !== null ? sql.AS_OF_FILTER : sql.CURRENT_FILTER];
     const params: Record<string, unknown> = {
       now: this.clock.now(),
-      halfLifeDays: this.ranking.halfLifeDays,
+      hlSemantic: this.ranking.halfLifeDays,
+      hlEpisodic: this.ranking.kindHalfLifeDays.episodic,
+      hlProcedural: this.ranking.kindHalfLifeDays.procedural,
+      importanceWeight: this.ranking.importanceWeight,
+      importanceHlWeight: this.ranking.importanceHalfLifeWeight,
+      minHlFactor: MIN_HALFLIFE_FACTOR,
       limit,
     };
     if (asOf !== null) params.asOf = asOf;
     if (subject !== "") {
       filters.push(sql.SUBJECT_FILTER);
       params.subject = subject;
+    }
+    if (kind !== null) {
+      filters.push(sql.KIND_FILTER);
+      params.kind = kind;
     }
 
     let rows: Array<FactRow & { fts_rank: number | null; score: number }>;
@@ -219,6 +266,16 @@ export class Memharness {
       budget -= cost;
       facts.push({ ...rowToFact(row), score: row.score });
     }
+
+    // Reinforce-on-access: surfacing a current belief freshens its decay clock.
+    // Current mode only (historical as_of recall is a pure read), and only the
+    // facts actually returned. Writes last_accessed_at — never a belief-set
+    // predicate — so membership, as_of, and I1 (tx_at) are untouched.
+    if (asOf === null && facts.length > 0) {
+      const accessedIds = facts.map((f) => f.id);
+      this.prep(sql.REINFORCE_ACCESS).run(this.clock.now(), JSON.stringify(accessedIds));
+    }
+
     return { facts, asOf, truncated, usedFallback };
   }
 
@@ -233,6 +290,9 @@ export class Memharness {
           `fact #${old.id} is already superseded by #${old.superseded_by}; revise the head of the chain`,
         );
       }
+      // A correction inherits the old fact's salience/kind unless explicitly overridden.
+      const importance = checkImportance(input.importance, old.importance);
+      const kind = checkKind(input.kind, old.kind);
       const txAt = this.clock.now();
       const validFrom =
         input.validFrom !== undefined ? normalizeIso(input.validFrom, "validFrom") : txAt;
@@ -241,6 +301,8 @@ export class Memharness {
         predicate: old.predicate,
         fact: newFact,
         confidence,
+        importance,
+        kind,
         validFrom,
         txAt,
         sourceAgent: input.sourceAgent ?? "",

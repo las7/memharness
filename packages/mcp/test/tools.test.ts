@@ -174,6 +174,38 @@ describe("memharness MCP server", () => {
     expect(JSON.stringify(metas)).not.toContain("oolong");
   });
 
+  it("round-trips importance and kind, and filters recall by kind", async () => {
+    const { mem, client } = await connected();
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "core identity fact", importance: 9, kind: "semantic" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "run pnpm build to deploy", kind: "procedural" },
+    });
+    expect(mem.why(1).fact.importance).toBe(9);
+    expect(mem.why(2).fact.kind).toBe("procedural");
+    // default importance/kind when unspecified
+    expect(mem.why(2).fact.importance).toBe(5);
+    expect(mem.why(1).fact.kind).toBe("semantic");
+
+    const proc = await client.callTool({
+      name: "recall",
+      arguments: { subject: "user", kind: "procedural" },
+    });
+    expect(textOf(proc)).toContain("run pnpm build to deploy");
+    expect(textOf(proc)).not.toContain("core identity fact");
+
+    // revise inherits importance/kind unless overridden
+    await client.callTool({
+      name: "revise",
+      arguments: { old_fact_id: 1, new_fact: "core identity fact v2" },
+    });
+    expect(mem.why(3).fact.importance).toBe(9);
+    expect(mem.why(3).fact.kind).toBe("semantic");
+  });
+
   it("forget with no arguments asks for one", async () => {
     const { client } = await connected();
     const r = await client.callTool({ name: "forget", arguments: {} });

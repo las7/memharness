@@ -2,8 +2,9 @@ import type { Database } from "better-sqlite3";
 import { MemharnessError } from "../errors.js";
 import { m001 } from "./m001_initial.js";
 import { m002 } from "./m002_porter_fts.js";
+import { m003 } from "./m003_ranking_dimensions.js";
 
-const MIGRATIONS: Array<(db: Database) => void> = [m001, m002];
+const MIGRATIONS: Array<(db: Database) => void> = [m001, m002, m003];
 
 /** Forward-only, user_version-driven. Returns the resulting schema version. */
 export function runMigrations(db: Database): number {

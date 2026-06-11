@@ -9,6 +9,8 @@ function fact(overrides: Partial<Fact> = {}): Fact {
     predicate: "",
     fact: "drinks oolong tea",
     confidence: 1.0,
+    importance: 5,
+    kind: "semantic",
     validFrom: "2026-03-01T10:00:00.000Z",
     validTo: null,
     txAt: "2026-03-01T10:00:00.000Z",
@@ -16,6 +18,7 @@ function fact(overrides: Partial<Fact> = {}): Fact {
     sourceAgent: "claude-desktop",
     sourceRef: "",
     retractedAt: null,
+    lastAccessedAt: null,
     ...overrides,
   };
 }
@@ -37,6 +40,13 @@ describe("fmtFact", () => {
     });
     expect(fmtFact(f, true)).toBe(
       "[#2] user (prefers) : dark mode  {conf=0.80, src=cc, ref=session-1, valid 2026-03-01 → now, learned 2026-03-01}",
+    );
+  });
+
+  it("shows importance and kind only when non-default", () => {
+    expect(fmtFact(fact({ importance: 5, kind: "semantic" }))).not.toContain("imp=");
+    expect(fmtFact(fact({ importance: 9, kind: "procedural" }))).toContain(
+      "imp=9, kind=procedural",
     );
   });
 

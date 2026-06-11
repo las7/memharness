@@ -7,6 +7,8 @@ export function fmtFact(f: Fact, showTime = false): string {
   parts.push(`: ${f.fact}`);
   const meta = [`conf=${f.confidence.toFixed(2)}`, `src=${f.sourceAgent || "unknown"}`];
   if (f.sourceRef) meta.push(`ref=${f.sourceRef}`);
+  if (f.importance !== 5) meta.push(`imp=${f.importance}`);
+  if (f.kind !== "semantic") meta.push(`kind=${f.kind}`);
   if (showTime) {
     meta.push(`valid ${f.validFrom.slice(0, 10)} → ${f.validTo ? f.validTo.slice(0, 10) : "now"}`);
     meta.push(`learned ${f.txAt.slice(0, 10)}`);

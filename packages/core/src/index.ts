@@ -12,6 +12,7 @@ export type {
   ForgetInput,
   ForgetResult,
   MemharnessOptions,
+  MemoryKind,
   RankingOptions,
   RecallInput,
   RecallResult,

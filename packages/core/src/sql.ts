@@ -2,8 +2,8 @@
 // (e.g. node:sqlite, Postgres) mechanical.
 
 export const INSERT_FACT = `
-INSERT INTO facts (subject, predicate, fact, confidence, valid_from, valid_to, tx_at, source_agent, source_ref)
-VALUES (@subject, @predicate, @fact, @confidence, @validFrom, NULL, @txAt, @sourceAgent, @sourceRef)`;
+INSERT INTO facts (subject, predicate, fact, confidence, importance, kind, valid_from, valid_to, tx_at, source_agent, source_ref)
+VALUES (@subject, @predicate, @fact, @confidence, @importance, @kind, @validFrom, NULL, @txAt, @sourceAgent, @sourceRef)`;
 
 export const GET_FACT = "SELECT * FROM facts WHERE id = ?";
 
@@ -27,6 +27,8 @@ export const AS_OF_FILTER = `f.tx_at <= @asOf AND f.valid_from <= @asOf
 
 export const SUBJECT_FILTER = "f.subject = @subject";
 
+export const KIND_FILTER = "f.kind = @kind";
+
 export const FTS_JOIN = `JOIN (
   SELECT rowid, row_number() OVER (ORDER BY rank) AS fts_rank
   FROM facts_fts WHERE facts_fts MATCH @match
@@ -36,8 +38,29 @@ export const LIKE_FILTER = `(f.subject LIKE @pattern ESCAPE '\\'
   OR f.predicate LIKE @pattern ESCAPE '\\'
   OR f.fact LIKE @pattern ESCAPE '\\')`;
 
-/** Recency decay: 0.5^(ageDays / halfLifeDays), age clamped at 0 for future txAt. */
-export const DECAY_EXPR = "pow(0.5, max(0, julianday(@now) - julianday(f.tx_at)) / @halfLifeDays)";
+/**
+ * Per-row effective half-life: base(kind) × (1 + importanceHlWeight·(importance−5)),
+ * floored so importance can never make decay non-positive. Mirrors
+ * ranking.ts effectiveHalfLife.
+ */
+export const EFFECTIVE_HALFLIFE_EXPR = `(
+  (CASE f.kind
+     WHEN 'episodic'   THEN @hlEpisodic
+     WHEN 'procedural' THEN @hlProcedural
+     ELSE @hlSemantic
+   END)
+  * max(@minHlFactor, 1.0 + @importanceHlWeight * (f.importance - 5))
+)`;
+
+/** Age in days from last access (reinforce-on-access) or txAt, clamped at 0 for future stamps. */
+export const AGE_EXPR =
+  "max(0, julianday(@now) - julianday(COALESCE(f.last_accessed_at, f.tx_at)))";
+
+/** Recency decay: 0.5^(age / effectiveHalfLife). */
+export const DECAY_EXPR = `pow(0.5, ${AGE_EXPR} / ${EFFECTIVE_HALFLIFE_EXPR})`;
+
+/** Direct salience multiplier: 1 + importanceWeight·(importance−5). */
+export const IMPORTANCE_BOOST_EXPR = "(1.0 + @importanceWeight * (f.importance - 5))";
 
 export function recallQuery(opts: { fts: boolean; filters: string[] }): string {
   const rrf = opts.fts ? "(1.0 / (@rrfK + m.fts_rank))" : "1.0";
@@ -45,12 +68,16 @@ export function recallQuery(opts: { fts: boolean; filters: string[] }): string {
   const where = opts.filters.length > 0 ? `WHERE ${opts.filters.join(" AND ")}` : "";
   return `
 SELECT f.*, ${opts.fts ? "m.fts_rank" : "NULL"} AS fts_rank,
-       ${rrf} * f.confidence * ${DECAY_EXPR} AS score
+       ${rrf} * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} AS score
 FROM facts f ${join}
 ${where}
 ORDER BY score DESC, f.tx_at DESC, f.id DESC
 LIMIT @limit`;
 }
+
+/** Reinforce-on-access: freshen last_accessed_at for the returned current-mode facts (ranking only). */
+export const REINFORCE_ACCESS =
+  "UPDATE facts SET last_accessed_at = ? WHERE id IN (SELECT value FROM json_each(?))";
 
 export const DIFF_LEARNED = `SELECT * FROM facts f
 WHERE f.tx_at >= @since AND f.superseded_by IS NULL AND f.retracted_at IS NULL

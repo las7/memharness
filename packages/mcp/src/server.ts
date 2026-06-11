@@ -100,6 +100,24 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           .max(1)
           .optional()
           .describe("Numeric override for basis; rarely needed"),
+        importance: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe(
+            "1–10 salience: how strongly this should rank up and resist decay. Default 5 " +
+              "(neutral). Reserve 8–10 for durable, high-stakes facts (core identity, hard " +
+              "constraints); 1–3 for incidental detail.",
+          ),
+        kind: z
+          .enum(["semantic", "episodic", "procedural"])
+          .optional()
+          .describe(
+            "semantic = stable facts/preferences (slow decay), episodic = events/one-offs " +
+              "(fast decay), procedural = how-to/workflow (slow decay). Default semantic.",
+          ),
         source_ref: z
           .string()
           .optional()
@@ -114,16 +132,15 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
     (args) =>
       handle("remember", () => {
         if (args.fact.length > MAX_FACT_CHARS) {
-          return (
-            `Not stored: ${args.fact.length} characters is a briefing note, not a fact. ` +
-            "Split it into separate remember calls, one assertion each, and try again."
-          );
+          return `Not stored: ${args.fact.length} characters is a briefing note, not a fact. Split it into separate remember calls, one assertion each, and try again.`;
         }
         const r = mem.remember({
           subject: args.subject,
           fact: args.fact,
           predicate: args.predicate,
           confidence: args.confidence ?? BASIS_CONFIDENCE[args.basis ?? "user-stated"],
+          importance: args.importance,
+          kind: args.kind,
           sourceRef: args.source_ref,
           sourceAgent: args.source_agent ?? "mcp",
           validFrom: args.valid_from,
@@ -143,12 +160,18 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
     {
       description:
         "Retrieve relevant memories. A plain call returns current beliefs ranked by " +
-        "relevance × confidence × recency. as_of (ISO date, e.g. '2026-06-01') returns what " +
+        "relevance × confidence × importance × recency (recency is freshened each time a fact " +
+        "is recalled). as_of (ISO date, e.g. '2026-06-01') returns what " +
         "was believed AT THAT TIME — including facts since revised or retracted. Use as_of to " +
-        "answer 'what did you think before I corrected you?'. subject filters to one entity.",
+        "answer 'what did you think before I corrected you?'. subject filters to one entity; " +
+        "kind filters to semantic/episodic/procedural.",
       inputSchema: {
         query: z.string().optional().describe("Free-text search over the facts"),
         subject: z.string().optional().describe("Exact subject filter, e.g. 'user'"),
+        kind: z
+          .enum(["semantic", "episodic", "procedural"])
+          .optional()
+          .describe("Filter to one memory kind"),
         as_of: z
           .string()
           .optional()
@@ -172,6 +195,7 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           const r = mem.recall({
             query: args.query,
             subject: args.subject,
+            kind: args.kind,
             asOf: args.as_of,
             limit: args.limit,
             maxTokens: args.max_tokens,
@@ -195,7 +219,8 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
         "Replace a belief with an updated one. The old fact is closed and linked to its " +
         "successor — history is preserved, never deleted. Use when the user corrects you or " +
         "circumstances change. Find the old fact's id with recall first. valid_from can " +
-        "backdate when the new state actually began (e.g. 'moved last month').",
+        "backdate when the new state actually began (e.g. 'moved last month'). importance and " +
+        "kind are inherited from the old fact unless you override them.",
       inputSchema: {
         old_fact_id: z.number().int().describe("Id of the fact being superseded"),
         new_fact: z.string().describe("The corrected statement"),
@@ -204,6 +229,17 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           .optional()
           .describe("How you know the correction. Sets confidence. Default user-stated"),
         confidence: z.number().min(0).max(1).optional().describe("Numeric override for basis"),
+        importance: z
+          .number()
+          .int()
+          .min(1)
+          .max(10)
+          .optional()
+          .describe("1–10 salience override; default inherits the old fact's importance"),
+        kind: z
+          .enum(["semantic", "episodic", "procedural"])
+          .optional()
+          .describe("Override the memory kind; default inherits the old fact's kind"),
         source_ref: z.string().optional(),
         source_agent: z.string().optional(),
         valid_from: z
@@ -218,6 +254,8 @@ export function createServer(mem: Memharness, logUsage: UsageLogger = () => {}):
           oldFactId: args.old_fact_id,
           newFact: args.new_fact,
           confidence: args.confidence ?? BASIS_CONFIDENCE[args.basis ?? "user-stated"],
+          importance: args.importance,
+          kind: args.kind,
           sourceRef: args.source_ref,
           sourceAgent: args.source_agent ?? "mcp",
           validFrom: args.valid_from,
