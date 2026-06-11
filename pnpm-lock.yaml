@@ -56,6 +56,28 @@ importers:
         specifier: ^3.1.4
         version: 3.2.6(@types/node@22.19.20)(tsx@4.22.4)
 
+  packages/eval:
+    dependencies:
+      '@memharness/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@memharness/embed':
+        specifier: workspace:*
+        version: link:../embed
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.19.20
+      tsx:
+        specifier: ^4.19.0
+        version: 4.22.4
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.4
+        version: 3.2.6(@types/node@22.19.20)(tsx@4.22.4)
+
   packages/mcp:
     dependencies:
       '@memharness/core':

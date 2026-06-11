@@ -1,0 +1,30 @@
+{
+  "name": "@memharness/eval",
+  "version": "0.1.0",
+  "description": "Offline-by-default recall-accuracy harness for memharness: replays a timed dataset and scores recall@k by category across retrieval and ranking-feature arms.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.19"
+  },
+  "bin": {
+    "memharness-eval": "dist/runner.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "eval": "node --import tsx src/runner.ts"
+  },
+  "dependencies": {
+    "@memharness/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@memharness/embed": "workspace:*",
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.4"
+  }
+}
