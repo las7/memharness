@@ -49,7 +49,9 @@ export class Oracle {
   }): void {
     const old = this.facts.get(args.oldId);
     if (!old) throw new Error(`oracle: revise of unknown #${args.oldId}`);
-    old.validTo = args.ts;
+    // The old fact stops being true in the world when the new one starts
+    // (validFrom = ts unless backdated), not when we learned about it.
+    old.validTo = args.validFrom;
     old.supersededBy = args.newId;
     this.facts.set(args.newId, {
       id: args.newId,
@@ -93,11 +95,16 @@ export class Oracle {
     return out;
   }
 
-  /** Current beliefs: open validity, not superseded, not retracted. */
-  currentBeliefs(): Set<number> {
+  /** Current beliefs: already valid at `now`, open validity, not superseded, not retracted. */
+  currentBeliefs(now: string): Set<number> {
     const out = new Set<number>();
     for (const f of this.facts.values()) {
-      if (f.validTo === null && f.supersededBy === null && f.retractedAt === null) {
+      if (
+        f.validFrom <= now &&
+        f.validTo === null &&
+        f.supersededBy === null &&
+        f.retractedAt === null
+      ) {
         out.add(f.id);
       }
     }

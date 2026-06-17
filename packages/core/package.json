@@ -22,7 +22,8 @@
     "bench": "node --import tsx bench/seed.ts && node --import tsx bench/recall-bench.ts --assert"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0"
+    "better-sqlite3": "^11.10.0",
+    "sqlite-vec": "^0.1.9"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

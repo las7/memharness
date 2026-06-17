@@ -5,4 +5,5 @@ dist/
 *.db-shm
 .memharness/
 bench-results.json
+eval-results.json
 .DS_Store

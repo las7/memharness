@@ -46,12 +46,25 @@ function runScenario(ops: Op[]): void {
           const targets = [...oracle.facts.values()].filter((f) => f.supersededBy === null);
           if (targets.length === 0) break;
           const target = targets[op.targetSeed % targets.length]!;
-          const { newId, txAt } = mem.revise({ oldFactId: target.id, newFact: factText(op.words) });
+          // Backdate clamped into [old.validFrom, now] so validation always
+          // passes; future-dated targets fall back to a plain revise.
+          const t = clock.peek();
+          let validFrom: string | undefined;
+          if (op.backdateMs > 0 && target.validFrom <= t) {
+            validFrom = new Date(
+              Math.max(Date.parse(t) - op.backdateMs, Date.parse(target.validFrom)),
+            ).toISOString();
+          }
+          const { newId, txAt } = mem.revise({
+            oldFactId: target.id,
+            newFact: factText(op.words),
+            validFrom,
+          });
           oracle.revise({
             oldId: target.id,
             newId,
             ts: txAt,
-            validFrom: txAt,
+            validFrom: validFrom ?? txAt,
             subject: target.subject,
           });
           break;
@@ -82,9 +95,12 @@ function runScenario(ops: Op[]): void {
     // --- I4: nothing ever deleted
     expect(mem.stats().totalFacts).toBe(oracle.facts.size);
 
-    // --- current-mode recall matches the oracle
+    // --- current-mode recall matches the oracle. Jump past the largest
+    // future validFrom the generators emit (+1 day) so the recall's internal
+    // now() and the oracle's probe agree on which facts are already valid.
+    clock.advance(3 * 86_400_000);
     const current = new Set(mem.recall({ limit: BIG }).facts.map((f) => f.id));
-    expect(current).toEqual(oracle.currentBeliefs());
+    expect(current).toEqual(oracle.currentBeliefs(clock.peek()));
 
     // --- I2: superseded ⇒ closed validity, forward pointer
     for (const f of oracle.facts.values()) {

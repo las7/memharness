@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
+import * as sqliteVec from "sqlite-vec";
 
 /**
  * Default DB path: ~/.memharness/memory.db, honoring XDG_DATA_HOME on Linux.
@@ -28,4 +29,19 @@ export function openDatabase(dbPath: string): Database.Database {
   db.pragma("synchronous = NORMAL");
   db.pragma("foreign_keys = ON");
   return db;
+}
+
+/**
+ * Load the sqlite-vec extension (cosine KNN for hybrid recall). Returns false
+ * if the native build is unavailable, so recall degrades to FTS-only rather
+ * than crashing. The extension is per-connection.
+ */
+export function loadVecExtension(db: Database.Database): boolean {
+  try {
+    sqliteVec.load(db);
+    db.prepare("SELECT vec_version()").pluck().get();
+    return true;
+  } catch {
+    return false;
+  }
 }

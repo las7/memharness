@@ -15,6 +15,21 @@ describe("stats", () => {
     expect(s.schemaVersion).toBeGreaterThanOrEqual(1);
   });
 
+  it("excludes future-dated facts from currentBeliefs and topSubjects", () => {
+    const { mem, clock } = openTestDb("2026-06-01T00:00:00.000Z");
+    mem.remember({ subject: "u", fact: "live now" });
+    mem.remember({ subject: "u", fact: "not yet", validFrom: "2026-07-01T00:00:00.000Z" });
+
+    let s = mem.stats();
+    expect(s.totalFacts).toBe(2);
+    expect(s.currentBeliefs).toBe(1);
+    expect(s.topSubjects[0]).toEqual({ subject: "u", count: 1 });
+
+    clock.advance(45 * 24 * 3600 * 1000); // past July 1
+    s = mem.stats();
+    expect(s.currentBeliefs).toBe(2);
+  });
+
   it("ranks topSubjects by current-belief count, capped at 10", () => {
     const { mem } = openTestDb();
     for (let i = 0; i < 12; i++) {

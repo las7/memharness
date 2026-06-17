@@ -94,4 +94,28 @@ describe("remember", () => {
     expect(a < b).toBe(true);
     expect(b < c).toBe(true);
   });
+
+  it("round-trips a source_commit/source_path pin; freshness stays unwritten (null)", () => {
+    const { mem } = openTestDb();
+    const id = mem.remember({
+      subject: "project:memharness",
+      fact: "INSERT_FACT inserts source_commit and source_path",
+      sourceCommit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+      sourcePath: "packages/core/src/sql.ts",
+    }).id;
+    const f = mem.why(id).fact;
+    expect(f.sourceCommit).toBe("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0");
+    expect(f.sourcePath).toBe("packages/core/src/sql.ts");
+    // Phase 1: the verdict columns are written by nobody and stay NULL.
+    expect(f.freshness).toBeNull();
+    expect(f.checkedAt).toBeNull();
+    expect(f.checkedHead).toBeNull();
+  });
+
+  it("defaults the source pin to null when not supplied", () => {
+    const { mem } = openTestDb();
+    const f = mem.why(mem.remember({ subject: "user", fact: "a" }).id).fact;
+    expect(f.sourceCommit).toBeNull();
+    expect(f.sourcePath).toBeNull();
+  });
 });

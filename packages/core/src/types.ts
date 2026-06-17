@@ -1,3 +1,6 @@
+/** Cognitive kind of a memory: stable facts/preferences vs one-off events vs how-to. */
+export type MemoryKind = "semantic" | "episodic" | "procedural";
+
 /** A single atomic fact row. Timestamps are canonical ISO 8601 UTC: YYYY-MM-DDTHH:mm:ss.sssZ. */
 export interface Fact {
   id: number;
@@ -5,6 +8,10 @@ export interface Fact {
   predicate: string;
   fact: string;
   confidence: number;
+  /** Caller-supplied salience, 1..10. 5 = neutral. Ranking metadata only. */
+  importance: number;
+  /** Cognitive memory kind. Ranking metadata only. */
+  kind: MemoryKind;
   /** When this became true in the world (valid time). */
   validFrom: string;
   /** When this stopped being true in the world. null = open-ended. */
@@ -14,8 +21,20 @@ export interface Fact {
   supersededBy: number | null;
   sourceAgent: string;
   sourceRef: string;
+  /** Git SHA the fact was read at (source axis). null = not code-pinned. Agent-supplied, immutable. */
+  sourceCommit: string | null;
+  /** Repo-relative path the fact describes. null = whole-repo / none. */
+  sourcePath: string | null;
+  /** Out-of-band staleness verdict. null = unchecked/unpinned. Written only by Phase 2's staleness bin. */
+  freshness: "current" | "stale" | "unresolved" | null;
+  /** When the staleness bin last checked this fact. null = never. */
+  checkedAt: string | null;
+  /** HEAD SHA the check ran against. null = never. */
+  checkedHead: string | null;
   /** When this was retracted (tombstoned). null = not retracted. Never deleted (I4). */
   retractedAt: string | null;
+  /** Last time this fact was surfaced by a current-mode recall (reinforce-on-access). null = never. Ranking metadata only. */
+  lastAccessedAt: string | null;
 }
 
 export interface Clock {
@@ -24,10 +43,16 @@ export interface Clock {
 }
 
 export interface RankingOptions {
-  /** Recency-decay half-life in days, applied to txAt. Default 90. */
+  /** Base recency-decay half-life in days (for 'semantic'). Default 90. */
   halfLifeDays?: number;
   /** Reciprocal-rank-fusion constant. Default 60. */
   rrfK?: number;
+  /** Direct ranking-multiplier slope per importance step from 5. Default 0.05. */
+  importanceWeight?: number;
+  /** Half-life modulation slope per importance step from 5. Default 0.15. */
+  importanceHalfLifeWeight?: number;
+  /** Base half-life per kind. Defaults: semantic 90, episodic 30, procedural 180. */
+  kindHalfLifeDays?: Partial<Record<MemoryKind, number>>;
 }
 
 export interface MemharnessOptions {
@@ -43,8 +68,16 @@ export interface RememberInput {
   predicate?: string;
   /** 0..1. Default 1.0. */
   confidence?: number;
+  /** Caller-supplied salience, integer 1..10. Default 5 (neutral). */
+  importance?: number;
+  /** Cognitive memory kind. Default 'semantic'. */
+  kind?: MemoryKind;
   sourceRef?: string;
   sourceAgent?: string;
+  /** Git SHA you read this code at; pins the fact for staleness checking. Omit for non-code facts. */
+  sourceCommit?: string;
+  /** Repo-relative file path this fact describes, if any. */
+  sourcePath?: string;
   /** ISO 8601; normalized. Default: now. */
   validFrom?: string;
 }
@@ -57,6 +90,10 @@ export interface RememberResult {
 export interface RecallInput {
   query?: string;
   subject?: string;
+  /** Restrict to one memory kind. */
+  kind?: MemoryKind;
+  /** Query embedding for hybrid recall. Fused with FTS via RRF; ignored if sqlite-vec is unavailable. */
+  queryVector?: Float32Array | number[];
   /** ISO date or datetime. Returns beliefs as held at that instant. */
   asOf?: string;
   /** Max facts returned. Default 8. */
@@ -83,8 +120,16 @@ export interface ReviseInput {
   oldFactId: number;
   newFact: string;
   confidence?: number;
+  /** Integer 1..10. Default: inherit the old fact's importance. */
+  importance?: number;
+  /** Default: inherit the old fact's kind. */
+  kind?: MemoryKind;
   sourceRef?: string;
   sourceAgent?: string;
+  /** Git SHA the correction was read at; pins the new fact. Default: do not inherit (null unless re-supplied). */
+  sourceCommit?: string;
+  /** Repo-relative file path the corrected fact describes, if any. */
+  sourcePath?: string;
   /** When the new belief became true in the world. Default: now. */
   validFrom?: string;
 }
