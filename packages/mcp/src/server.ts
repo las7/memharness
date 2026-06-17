@@ -30,6 +30,34 @@ const BASIS_CONFIDENCE = {
   inferred: 0.6,
 } as const;
 
+/** A fact must be at least this long to even be a code-map-smell candidate. */
+const CODEMAP_MIN_CHARS = 160;
+/** File-path-like tokens: a slash-separated path ending in a common source extension. */
+const FILE_PATH_RE =
+  /[\w.-]+\/[\w./-]*\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|rb|c|h|cpp|cc|hpp|sql|json|toml|yaml|yml|sh)\b/gi;
+/** Dotted or deeply-snake_cased symbol names, e.g. `foo.barBaz` or `some_long_helper_name`. */
+const SYMBOL_RE = /\b\w+(?:\.\w+){2,}\b|\b\w+_\w+_\w+\w*\b/g;
+
+/**
+ * Conservative "code-map smell" heuristic: does this fact read like a structural
+ * map an Explore agent could reconstruct from the repo (file lists / call graphs /
+ * symbol tables), rather than a decision/rationale/gotcha worth remembering?
+ * Tuned for low false positives: it must be long AND carry several path/symbol
+ * tokens. Advisory only — the caller never blocks the write on it.
+ */
+function looksLikeCodeMap(fact: string): boolean {
+  if (fact.length < CODEMAP_MIN_CHARS) return false;
+  const paths = (fact.match(FILE_PATH_RE) ?? []).length;
+  const symbols = new Set(fact.match(SYMBOL_RE) ?? []).size;
+  // Several real file paths is the strongest signal on its own.
+  if (paths >= 3) return true;
+  // Or a path or two plus a cluster of dotted/snake symbol names.
+  if (paths >= 1 && symbols >= 3) return true;
+  // Or many distinct symbol-table-like names with no prose justification.
+  if (symbols >= 5) return true;
+  return false;
+}
+
 /**
  * Wraps a Memharness instance as an MCP server. logUsage receives the op name
  * only (dogfood-gate instrumentation; never fact content).
@@ -85,7 +113,9 @@ export function createServer(
         "later. Use for durable knowledge about the user, their projects, preferences, " +
         "decisions, and environment — not transient task state. If this contradicts an " +
         "existing belief, find it with recall and use revise instead. Always fill source_ref " +
-        "with where this came from (session, file, URL) if known.",
+        "with where this came from (session, file, URL) if known. If the fact describes code " +
+        "you just read at a known commit, also set source_commit (and source_path) so staleness " +
+        "checking can flag it when the repo moves past that commit.",
       inputSchema: {
         subject: z.string().describe("What the fact is about, e.g. 'user' or 'project:memharness'"),
         fact: z.string().describe("The atomic statement itself"),
@@ -129,6 +159,17 @@ export function createServer(
           .string()
           .optional()
           .describe("Where this came from: session id, file path, URL, utterance"),
+        source_commit: z
+          .string()
+          .optional()
+          .describe(
+            "Git SHA you read this code at; pins the fact for staleness checking. " +
+              "Omit for non-code facts.",
+          ),
+        source_path: z
+          .string()
+          .optional()
+          .describe("Repo-relative file path this fact describes, if any."),
         source_agent: z.string().optional().describe("Which agent/app is writing this"),
         valid_from: z
           .string()
@@ -149,15 +190,28 @@ export function createServer(
           importance: args.importance,
           kind: args.kind,
           sourceRef: args.source_ref,
+          sourceCommit: args.source_commit,
+          sourcePath: args.source_path,
           sourceAgent: args.source_agent ?? "mcp",
           validFrom: args.valid_from,
         });
         // In-result feedback steers models far better than upfront instructions.
-        const nudge =
-          args.fact.length > 280
-            ? " Note: that fact is long — next time split compound knowledge into separate " +
-              "remember calls so each piece can be revised independently."
-            : "";
+        const nudges: string[] = [];
+        if (args.fact.length > 280) {
+          nudges.push(
+            "that fact is long — next time split compound knowledge into separate remember " +
+              "calls so each piece can be revised independently.",
+          );
+        }
+        // Code-map smell: a long, path/symbol-dense fact an Explore agent could
+        // reconstruct from the repo. Advisory only — never blocks the write.
+        if (args.source_commit === undefined && looksLikeCodeMap(args.fact)) {
+          nudges.push(
+            "this reads like a code map an Explore agent could reconstruct from the repo — " +
+              "consider storing the decision/rationale/gotcha instead, or pin it with source_commit.",
+          );
+        }
+        const nudge = nudges.length > 0 ? ` Note: ${nudges.join(" ")}` : "";
         return `Remembered as fact #${r.id}.${nudge}`;
       })(),
   );
@@ -260,6 +314,17 @@ export function createServer(
           .optional()
           .describe("Override the memory kind; default inherits the old fact's kind"),
         source_ref: z.string().optional(),
+        source_commit: z
+          .string()
+          .optional()
+          .describe(
+            "Git SHA you re-read this code at; re-pins the corrected fact. " +
+              "Not inherited from the old fact — supply it if the correction came from code.",
+          ),
+        source_path: z
+          .string()
+          .optional()
+          .describe("Repo-relative file path the corrected fact describes, if any."),
         source_agent: z.string().optional(),
         valid_from: z
           .string()
@@ -276,6 +341,8 @@ export function createServer(
           importance: args.importance,
           kind: args.kind,
           sourceRef: args.source_ref,
+          sourceCommit: args.source_commit,
+          sourcePath: args.source_path,
           sourceAgent: args.source_agent ?? "mcp",
           validFrom: args.valid_from,
         });

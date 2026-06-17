@@ -2,6 +2,26 @@ import { describe, expect, it } from "vitest";
 import { ids, openTestDb } from "./helpers.js";
 
 describe("recall (current beliefs)", () => {
+  it("excludes future-dated facts until their validFrom arrives (matches asOf-at-now)", () => {
+    const { mem, clock } = openTestDb("2026-06-01T00:00:00.000Z");
+    const now = mem.remember({ subject: "user", fact: "lives in Osaka" }).id;
+    const future = mem.remember({
+      subject: "user",
+      fact: "moves to Tokyo",
+      validFrom: "2026-07-01T00:00:00.000Z",
+    }).id;
+
+    let got = ids(mem.recall());
+    expect(got).toContain(now);
+    expect(got).not.toContain(future);
+    // the two views agree
+    expect(ids(mem.recall({ asOf: clock.peek() }))).toEqual(got);
+
+    clock.advance(45 * 24 * 3600 * 1000); // past July 1
+    got = ids(mem.recall());
+    expect(got).toContain(future);
+  });
+
   it("returns current beliefs only: excludes superseded and retracted", () => {
     const { mem } = openTestDb();
     const keep = mem.remember({ subject: "user", fact: "likes tea" }).id;

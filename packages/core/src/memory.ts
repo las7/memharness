@@ -41,6 +41,11 @@ interface FactRow {
   superseded_by: number | null;
   source_agent: string;
   source_ref: string;
+  source_commit: string | null;
+  source_path: string | null;
+  freshness: "current" | "stale" | "unresolved" | null;
+  checked_at: string | null;
+  checked_head: string | null;
   retracted_at: string | null;
   last_accessed_at: string | null;
 }
@@ -60,6 +65,11 @@ function rowToFact(row: FactRow): Fact {
     supersededBy: row.superseded_by,
     sourceAgent: row.source_agent,
     sourceRef: row.source_ref,
+    sourceCommit: row.source_commit,
+    sourcePath: row.source_path,
+    freshness: row.freshness,
+    checkedAt: row.checked_at,
+    checkedHead: row.checked_head,
     retractedAt: row.retracted_at,
     lastAccessedAt: row.last_accessed_at,
   };
@@ -196,6 +206,64 @@ export class Memharness {
     }>;
   }
 
+  /**
+   * Live, pinned facts oldest-first — the source-staleness work-list (the
+   * source-axis analogue of embedTargets). Pure SQL, no git: the bin runs git
+   * and writes verdicts back via setStaleness. source_ref is returned so the
+   * bin can backfill a SHA out of free-text refs on its first run.
+   */
+  stalenessTargets(limit: number): Array<{
+    id: number;
+    sourceRef: string;
+    sourceCommit: string;
+    sourcePath: string | null;
+  }> {
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new ValidationError(`limit must be a positive integer, got ${limit}`);
+    }
+    return (
+      this.prep(sql.STALENESS_TARGETS).all({ limit }) as Array<{
+        id: number;
+        source_ref: string;
+        source_commit: string;
+        source_path: string | null;
+      }>
+    ).map((r) => ({
+      id: r.id,
+      sourceRef: r.source_ref,
+      sourceCommit: r.source_commit,
+      sourcePath: r.source_path,
+    }));
+  }
+
+  /**
+   * Write a precomputed staleness verdict (the source-axis analogue of
+   * setEmbedding). The ONLY writer of freshness/checked_*; touches source-axis
+   * columns only — never tx_at, valid_from/valid_to, fact, or confidence
+   * (preserving I1/I4). May set source_commit/source_path on first-run backfill.
+   * No git here (I5):
+   * the git logic lives in the memharness-staleness bin.
+   */
+  setStaleness(
+    id: number,
+    v: {
+      freshness: "current" | "stale" | "unresolved";
+      checkedAt: string;
+      checkedHead: string;
+      sourceCommit?: string;
+      sourcePath?: string;
+    },
+  ): void {
+    this.prep(sql.SET_STALENESS).run({
+      id,
+      freshness: v.freshness,
+      checkedAt: v.checkedAt,
+      checkedHead: v.checkedHead,
+      sourceCommit: v.sourceCommit ?? null,
+      sourcePath: v.sourcePath ?? null,
+    });
+  }
+
   private prep(sqlText: string): Statement {
     let stmt = this.stmts.get(sqlText);
     if (stmt === undefined) {
@@ -225,6 +293,8 @@ export class Memharness {
       txAt,
       sourceAgent: input.sourceAgent ?? "",
       sourceRef: input.sourceRef ?? "",
+      sourceCommit: input.sourceCommit ?? null,
+      sourcePath: input.sourcePath ?? null,
     });
     return { id: Number(result.lastInsertRowid), txAt };
   }
@@ -361,16 +431,36 @@ export class Memharness {
       const old = this.prep(sql.GET_FACT).get(input.oldFactId) as FactRow | undefined;
       if (old === undefined) throw new NotFoundError(`no fact #${input.oldFactId}`);
       if (old.superseded_by !== null) {
+        // Quote the live head so a caller revising off a stale recall can
+        // re-decide against the current text instead of blindly re-applying.
+        let head: FactRow = old;
+        while (head.superseded_by !== null) {
+          const next = this.prep(sql.GET_FACT).get(head.superseded_by) as FactRow | undefined;
+          if (next === undefined) break;
+          head = next;
+        }
         throw new ValidationError(
-          `fact #${old.id} is already superseded by #${old.superseded_by}; revise the head of the chain`,
+          `fact #${old.id} is already superseded by #${old.superseded_by}; ` +
+            `the head of the chain is #${head.id}: "${head.fact}" — ` +
+            `re-check your correction against it, then revise #${head.id} if still needed`,
         );
       }
       // A correction inherits the old fact's salience/kind unless explicitly overridden.
       const importance = checkImportance(input.importance, old.importance);
       const kind = checkKind(input.kind, old.kind);
       const txAt = this.clock.now();
-      const validFrom =
-        input.validFrom !== undefined ? normalizeIso(input.validFrom, "validFrom") : txAt;
+      let validFrom = txAt;
+      if (input.validFrom !== undefined) {
+        validFrom = normalizeIso(input.validFrom, "validFrom");
+        // The old fact's validity closes at validFrom (world time), so the
+        // backdate must land inside [old.valid_from, txAt] or the two
+        // intervals would overlap or invert.
+        if (validFrom < old.valid_from || validFrom > txAt) {
+          throw new ValidationError(
+            `validFrom must be within [${old.valid_from} (old fact's validFrom), ${txAt} (now)], got ${validFrom}`,
+          );
+        }
+      }
       const inserted = this.prep(sql.INSERT_FACT).run({
         subject: old.subject,
         predicate: old.predicate,
@@ -382,9 +472,15 @@ export class Memharness {
         txAt,
         sourceAgent: input.sourceAgent ?? "",
         sourceRef: input.sourceRef ?? "",
+        // A revision usually means the agent looked again at a new commit, so the
+        // pin does NOT inherit (null unless re-supplied) — spec §9 open-question 4.
+        sourceCommit: input.sourceCommit ?? null,
+        sourcePath: input.sourcePath ?? null,
       });
       const newId = Number(inserted.lastInsertRowid);
-      this.prep(sql.SUPERSEDE_FACT).run({ ts: txAt, newId, oldId: old.id });
+      // Close the old fact where the new one opens (validFrom = txAt unless
+      // backdated): adjacent half-open validity intervals, never overlapping.
+      this.prep(sql.SUPERSEDE_FACT).run({ ts: validFrom, newId, oldId: old.id });
       return { oldId: old.id, newId, txAt };
     });
     return run();
@@ -444,9 +540,13 @@ export class Memharness {
   }
 
   stats(): StatsResult {
+    const now = this.clock.now();
     const total = this.prep(sql.STATS_TOTAL).get() as { c: number };
-    const current = this.prep(sql.STATS_CURRENT).get() as { c: number };
-    const top = this.prep(sql.STATS_TOP_SUBJECTS).all() as Array<{ subject: string; c: number }>;
+    const current = this.prep(sql.STATS_CURRENT).get({ now }) as { c: number };
+    const top = this.prep(sql.STATS_TOP_SUBJECTS).all({ now }) as Array<{
+      subject: string;
+      c: number;
+    }>;
     return {
       dbPath: this.dbPath,
       totalFacts: total.c,

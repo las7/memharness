@@ -7,6 +7,12 @@ export function fmtFact(f: Fact, showTime = false): string {
   parts.push(`: ${f.fact}`);
   const meta = [`conf=${f.confidence.toFixed(2)}`, `src=${f.sourceAgent || "unknown"}`];
   if (f.sourceRef) meta.push(`ref=${f.sourceRef}`);
+  if (f.sourceCommit) {
+    const short = f.sourceCommit.slice(0, 7);
+    meta.push(`pin=${(f.sourcePath ? `${f.sourcePath}@` : "") + short}`);
+  }
+  if (f.freshness === "stale") meta.push("STALE");
+  else if (f.freshness === "unresolved") meta.push("stale?"); // SHA gone / off-branch — can't verify
   if (f.importance !== 5) meta.push(`imp=${f.importance}`);
   if (f.kind !== "semantic") meta.push(`kind=${f.kind}`);
   if (showTime) {
@@ -26,6 +32,13 @@ export function fmtRecall(r: RecallResult): string {
   const lines = r.facts.map((f) => fmtFact(f, r.asOf !== null));
   const notes: string[] = [];
   if (r.truncated) notes.push("(truncated to fit the token budget)");
+  // A pinned fact whose repo moved past it (STALE) or whose pin we can no longer
+  // verify (stale?) — surface a footer so the agent re-reads before trusting it.
+  if (r.facts.some((f) => f.freshness === "stale" || f.freshness === "unresolved")) {
+    notes.push(
+      "(some pinned facts may have drifted — run memharness-staleness, or re-verify against current code)",
+    );
+  }
   return [header, ...lines, ...notes].join("\n");
 }
 
@@ -48,6 +61,14 @@ export function fmtDiff(d: DiffResult): string {
 
 export function fmtWhy(w: WhyResult): string {
   const out = [fmtFact(w.fact, true)];
+  // Surface how fresh the staleness check itself is: a 'current' verdict against
+  // a long-stale checked_head is unfalsifiable without this.
+  if (w.fact.checkedAt || w.fact.checkedHead) {
+    const parts: string[] = [];
+    if (w.fact.checkedHead) parts.push(`checked_head ${w.fact.checkedHead.slice(0, 7)}`);
+    if (w.fact.checkedAt) parts.push(`checked_at ${w.fact.checkedAt.slice(0, 10)}`);
+    out.push(`  ${parts.join(", ")}`);
+  }
   for (const a of w.ancestors) out.push(`  superseded ← ${fmtFact(a, true)}`);
   for (const d of w.descendants) out.push(`  revised → ${fmtFact(d, true)}`);
   return out.join("\n");

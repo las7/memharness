@@ -10,7 +10,8 @@
   "bin": {
     "memharness-mcp": "dist/index.js",
     "memharness-context": "dist/context.js",
-    "memharness-reembed": "dist/reembed.js"
+    "memharness-reembed": "dist/reembed.js",
+    "memharness-staleness": "dist/staleness.js"
   },
   "exports": {
     ".": {

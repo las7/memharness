@@ -4,6 +4,12 @@ export { MemharnessError, NotFoundError, ValidationError } from "./errors.js";
 export { normalizeIso, isCanonicalIso } from "./time.js";
 export { estimateTokens } from "./tokens.js";
 export { resolveDefaultDbPath } from "./db.js";
+export {
+  parseSourceRef,
+  classifyFreshness,
+  type ParsedSourceRef,
+  type FreshnessInputs,
+} from "./staleness.js";
 export type {
   Clock,
   DiffInput,

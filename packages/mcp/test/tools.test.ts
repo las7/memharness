@@ -232,4 +232,65 @@ describe("memharness MCP server", () => {
     const r = await client.callTool({ name: "forget", arguments: {} });
     expect(textOf(r)).toBe("Provide fact_id or source_ref.");
   });
+
+  it("round-trips source_commit/source_path and surfaces pin= in recall", async () => {
+    const { mem, client } = await connected();
+    await client.callTool({
+      name: "remember",
+      arguments: {
+        subject: "project:memharness",
+        fact: "INSERT_FACT now writes source_commit",
+        source_commit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+        source_path: "packages/core/src/sql.ts",
+      },
+    });
+    expect(mem.why(1).fact.sourceCommit).toBe("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0");
+    expect(mem.why(1).fact.sourcePath).toBe("packages/core/src/sql.ts");
+
+    const r = await client.callTool({ name: "recall", arguments: { query: "INSERT_FACT" } });
+    expect(textOf(r)).toContain("pin=packages/core/src/sql.ts@a1b2c3d");
+  });
+
+  it("nudges on a code-map-smelling fact but not on a normal decision/prose fact", async () => {
+    const { client } = await connected();
+    // Reads like a structural map an Explore agent could rebuild: long + many paths.
+    const codeMap = await client.callTool({
+      name: "remember",
+      arguments: {
+        subject: "project:memharness",
+        fact:
+          "Recall flows through packages/mcp/src/server.ts into packages/core/src/memory.ts " +
+          "recall(), which calls recallQuery in packages/core/src/sql.ts and formats via " +
+          "packages/mcp/src/format.ts fmtFact.",
+      },
+    });
+    expect(textOf(codeMap)).toContain("reads like a code map");
+
+    // A pinned code fact should NOT get the nudge (the agent already pinned it).
+    const pinned = await client.callTool({
+      name: "remember",
+      arguments: {
+        subject: "project:memharness",
+        fact:
+          "Recall flows through packages/mcp/src/server.ts into packages/core/src/memory.ts " +
+          "recall(), which calls recallQuery in packages/core/src/sql.ts and formats via " +
+          "packages/mcp/src/format.ts fmtFact.",
+        source_commit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+      },
+    });
+    expect(textOf(pinned)).not.toContain("reads like a code map");
+
+    // A normal long decision/prose fact must NOT trip the heuristic (low false positives).
+    const decision = await client.callTool({
+      name: "remember",
+      arguments: {
+        subject: "project:memharness",
+        fact:
+          "We chose a three-state freshness enum over a boolean because the git ancestry check " +
+          "has three genuinely distinct outcomes and conflating diverged with unknown loses the " +
+          "one distinction an operator most needs when deciding whether to trust a pinned fact.",
+      },
+    });
+    expect(textOf(decision)).not.toContain("reads like a code map");
+  });
 });

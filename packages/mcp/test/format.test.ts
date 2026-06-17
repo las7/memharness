@@ -1,6 +1,6 @@
 import type { Fact } from "@memharness/core";
 import { describe, expect, it } from "vitest";
-import { fmtDiff, fmtFact, fmtRecall } from "../src/format.js";
+import { fmtDiff, fmtFact, fmtRecall, fmtWhy } from "../src/format.js";
 
 function fact(overrides: Partial<Fact> = {}): Fact {
   return {
@@ -17,6 +17,11 @@ function fact(overrides: Partial<Fact> = {}): Fact {
     supersededBy: null,
     sourceAgent: "claude-desktop",
     sourceRef: "",
+    sourceCommit: null,
+    sourcePath: null,
+    freshness: null,
+    checkedAt: null,
+    checkedHead: null,
     retractedAt: null,
     lastAccessedAt: null,
     ...overrides,
@@ -55,6 +60,37 @@ describe("fmtFact", () => {
     expect(fmtFact(f)).toContain("superseded_by=#9");
     expect(fmtFact(fact({ retractedAt: "2026-04-01T00:00:00.000Z" }))).toContain("RETRACTED");
   });
+
+  it("renders pin=path@shortsha only when source_commit is set, no STALE tag in Phase 1", () => {
+    // unpinned facts show no pin tag
+    expect(fmtFact(fact())).not.toContain("pin=");
+    const pinned = fact({
+      sourceCommit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+      sourcePath: "packages/core/src/sql.ts",
+    });
+    expect(fmtFact(pinned)).toContain("pin=packages/core/src/sql.ts@a1b2c3d");
+    // freshness is null in Phase 1 → no STALE / stale? tags
+    expect(fmtFact(pinned)).not.toContain("STALE");
+    // pathless pin renders just the 7-char sha
+    expect(fmtFact(fact({ sourceCommit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0" }))).toContain(
+      "pin=a1b2c3d",
+    );
+  });
+
+  it("renders STALE / stale? freshness tags (Phase 2), gated like other meta", () => {
+    const pinned = (freshness: Fact["freshness"]): Fact =>
+      fact({ sourceCommit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0", freshness });
+    // current / null → no tag
+    expect(fmtFact(pinned("current"))).not.toContain("STALE");
+    expect(fmtFact(pinned("current"))).not.toContain("stale?");
+    expect(fmtFact(pinned(null))).not.toContain("STALE");
+    // stale → STALE, after the pin
+    const stale = fmtFact(pinned("stale"));
+    expect(stale).toContain("STALE");
+    expect(stale.indexOf("pin=")).toBeLessThan(stale.indexOf("STALE"));
+    // unresolved → stale?
+    expect(fmtFact(pinned("unresolved"))).toContain("stale?");
+  });
 });
 
 describe("fmtRecall", () => {
@@ -81,6 +117,50 @@ describe("fmtRecall", () => {
     });
     expect(out.startsWith("Beliefs as of 2026-06-01T00:00:00.000Z:")).toBe(true);
     expect(out).toContain("valid 2026-03-01 → now");
+  });
+
+  it("adds a drift footer when any returned fact is non-current", () => {
+    const stale = { ...fact({ freshness: "stale" }), score: 1 };
+    const okOnly = fmtRecall({
+      facts: [{ ...fact({ freshness: "current" }), score: 1 }],
+      asOf: null,
+      truncated: false,
+      usedFallback: false,
+    });
+    expect(okOnly).not.toContain("may have drifted");
+    const withStale = fmtRecall({
+      facts: [stale],
+      asOf: null,
+      truncated: false,
+      usedFallback: false,
+    });
+    expect(withStale).toContain("may have drifted");
+    // unresolved also triggers the footer
+    const withUnresolved = fmtRecall({
+      facts: [{ ...fact({ freshness: "unresolved" }), score: 1 }],
+      asOf: null,
+      truncated: false,
+      usedFallback: false,
+    });
+    expect(withUnresolved).toContain("may have drifted");
+  });
+});
+
+describe("fmtWhy", () => {
+  it("includes checked_head/checked_at when the fact has been checked", () => {
+    const f = fact({
+      checkedHead: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      checkedAt: "2026-06-16T08:00:00.000Z",
+    });
+    const out = fmtWhy({ fact: f, ancestors: [], descendants: [] });
+    expect(out).toContain("checked_head deadbee");
+    expect(out).toContain("checked_at 2026-06-16");
+  });
+
+  it("omits the check line when never checked", () => {
+    const out = fmtWhy({ fact: fact(), ancestors: [], descendants: [] });
+    expect(out).not.toContain("checked_head");
+    expect(out).not.toContain("checked_at");
   });
 });
 

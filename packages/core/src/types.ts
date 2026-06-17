@@ -21,6 +21,16 @@ export interface Fact {
   supersededBy: number | null;
   sourceAgent: string;
   sourceRef: string;
+  /** Git SHA the fact was read at (source axis). null = not code-pinned. Agent-supplied, immutable. */
+  sourceCommit: string | null;
+  /** Repo-relative path the fact describes. null = whole-repo / none. */
+  sourcePath: string | null;
+  /** Out-of-band staleness verdict. null = unchecked/unpinned. Written only by Phase 2's staleness bin. */
+  freshness: "current" | "stale" | "unresolved" | null;
+  /** When the staleness bin last checked this fact. null = never. */
+  checkedAt: string | null;
+  /** HEAD SHA the check ran against. null = never. */
+  checkedHead: string | null;
   /** When this was retracted (tombstoned). null = not retracted. Never deleted (I4). */
   retractedAt: string | null;
   /** Last time this fact was surfaced by a current-mode recall (reinforce-on-access). null = never. Ranking metadata only. */
@@ -64,6 +74,10 @@ export interface RememberInput {
   kind?: MemoryKind;
   sourceRef?: string;
   sourceAgent?: string;
+  /** Git SHA you read this code at; pins the fact for staleness checking. Omit for non-code facts. */
+  sourceCommit?: string;
+  /** Repo-relative file path this fact describes, if any. */
+  sourcePath?: string;
   /** ISO 8601; normalized. Default: now. */
   validFrom?: string;
 }
@@ -112,6 +126,10 @@ export interface ReviseInput {
   kind?: MemoryKind;
   sourceRef?: string;
   sourceAgent?: string;
+  /** Git SHA the correction was read at; pins the new fact. Default: do not inherit (null unless re-supplied). */
+  sourceCommit?: string;
+  /** Repo-relative file path the corrected fact describes, if any. */
+  sourcePath?: string;
   /** When the new belief became true in the world. Default: now. */
   validFrom?: string;
 }

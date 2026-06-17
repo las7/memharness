@@ -17,7 +17,7 @@ export type Op =
       sourceRefIdx: number;
       deltaMs: number;
     }
-  | { type: "revise"; targetSeed: number; words: number[]; deltaMs: number }
+  | { type: "revise"; targetSeed: number; words: number[]; backdateMs: number; deltaMs: number }
   | { type: "forgetById"; targetSeed: number; deltaMs: number }
   | { type: "forgetBySource"; sourceRefIdx: number; deltaMs: number };
 
@@ -35,6 +35,8 @@ const reviseOp: fc.Arbitrary<Op> = fc.record({
   type: fc.constant("revise" as const),
   targetSeed: fc.nat(1000),
   words: fc.array(fc.nat(WORDS.length - 1), { minLength: 1, maxLength: 4 }),
+  // 0 = plain revise; >0 = backdated validFrom (clamped into the old fact's life)
+  backdateMs: fc.constantFrom(0, 1, 3_600_000, 86_400_000),
   deltaMs,
 });
 

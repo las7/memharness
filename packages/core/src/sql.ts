@@ -2,8 +2,8 @@
 // (e.g. node:sqlite, Postgres) mechanical.
 
 export const INSERT_FACT = `
-INSERT INTO facts (subject, predicate, fact, confidence, importance, kind, valid_from, valid_to, tx_at, source_agent, source_ref)
-VALUES (@subject, @predicate, @fact, @confidence, @importance, @kind, @validFrom, NULL, @txAt, @sourceAgent, @sourceRef)`;
+INSERT INTO facts (subject, predicate, fact, confidence, importance, kind, valid_from, valid_to, tx_at, source_agent, source_ref, source_commit, source_path)
+VALUES (@subject, @predicate, @fact, @confidence, @importance, @kind, @validFrom, NULL, @txAt, @sourceAgent, @sourceRef, @sourceCommit, @sourcePath)`;
 
 export const GET_FACT = "SELECT * FROM facts WHERE id = ?";
 
@@ -19,7 +19,7 @@ export const RETRACT_BY_SOURCE_REF =
   "UPDATE facts SET retracted_at = @ts WHERE source_ref = @sourceRef AND retracted_at IS NULL RETURNING id";
 
 export const CURRENT_FILTER =
-  "f.valid_to IS NULL AND f.superseded_by IS NULL AND f.retracted_at IS NULL";
+  "f.valid_from <= @now AND f.valid_to IS NULL AND f.superseded_by IS NULL AND f.retracted_at IS NULL";
 
 export const AS_OF_FILTER = `f.tx_at <= @asOf AND f.valid_from <= @asOf
   AND (f.valid_to IS NULL OR f.valid_to > @asOf)
@@ -89,6 +89,30 @@ export const COUNT_EMBEDDED = "SELECT COUNT(*) AS c FROM facts WHERE embedding I
 export const EMBED_TARGETS = `SELECT id, subject, predicate, fact FROM facts
 WHERE embedding IS NULL OR embedding_model IS NULL OR embedding_model != @model
 ORDER BY id LIMIT @limit`;
+
+/**
+ * Live, pinned facts oldest-first — the source-staleness work-list (EMBED_TARGETS
+ * shape). Hits the partial idx_facts_pinned (m005). source_ref is returned for
+ * first-run backfill (parsing a SHA out of free-text refs). Only facts that are
+ * still current (not superseded, not retracted) are checked.
+ */
+export const STALENESS_TARGETS = `SELECT id, source_ref, source_commit, source_path FROM facts
+WHERE source_commit IS NOT NULL AND retracted_at IS NULL AND superseded_by IS NULL
+ORDER BY id LIMIT @limit`;
+
+/**
+ * The ONLY writer of freshness/checked_*; UPDATE of source-axis columns only —
+ * never tx_at, valid_from/valid_to, fact, or confidence, so I1 (tx_at immutable)
+ * and I4 (never delete) hold. source_commit/source_path are optionally
+ * overwritten for first-run backfill (COALESCE keeps existing values when unset).
+ */
+export const SET_STALENESS = `UPDATE facts SET
+  freshness = @freshness,
+  checked_at = @checkedAt,
+  checked_head = @checkedHead,
+  source_commit = COALESCE(@sourceCommit, source_commit),
+  source_path = COALESCE(@sourcePath, source_path)
+WHERE id = @id`;
 
 /**
  * Hybrid recall: RRF-fuse an FTS rank list and a vector-KNN rank list, then
