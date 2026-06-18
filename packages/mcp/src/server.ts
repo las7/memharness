@@ -6,8 +6,16 @@ import { fmtDiff, fmtRecall, fmtStats, fmtWhy } from "./format.js";
 /** meta carries op-level counters (hit counts, flags) — never fact content. */
 export type UsageLogger = (op: string, meta?: Record<string, unknown>) => void;
 
-/** Optional query embedder; when supplied, recall runs hybrid (FTS + vector). */
-export type QueryEmbedder = (text: string) => Promise<Float32Array>;
+/**
+ * Optional embedding provider; when supplied, recall runs hybrid (FTS + vector)
+ * and the server keeps stored facts embedded automatically (no separate reembed
+ * step). `model` tags the vectors so a model change re-embeds cleanly.
+ */
+export interface EmbedProvider {
+  model: string;
+  query: (text: string) => Promise<Float32Array>;
+  documents: (texts: string[]) => Promise<Float32Array[]>;
+}
 
 interface TextResult {
   content: Array<{ type: "text"; text: string }>;
@@ -65,8 +73,48 @@ function looksLikeCodeMap(fact: string): boolean {
 export function createServer(
   mem: Memharness,
   logUsage: UsageLogger = () => {},
-  embedQuery?: QueryEmbedder,
+  embed?: EmbedProvider,
 ): McpServer {
+  /** Document text for a fact, matching the memharness-reembed CLI exactly. */
+  const docText = (f: { subject: string; predicate: string; fact: string }): string =>
+    [f.subject, f.predicate, f.fact].filter(Boolean).join(": ");
+
+  /**
+   * Keep the vector index current: embed any facts that lack a current-model
+   * vector. Runs before a hybrid recall so facts written via `remember` (or the
+   * core library, or before hybrid was enabled) are searchable without a manual
+   * reembed pass. Cheap when nothing is pending; the first call after enabling
+   * hybrid does the one-time backfill. Failures degrade to whatever is embedded.
+   */
+  let backfilling: Promise<void> | undefined;
+  const backfillEmbeddings = async (): Promise<void> => {
+    if (!embed) return;
+    // Collapse concurrent recalls onto a single in-flight backfill.
+    if (backfilling) return backfilling;
+    backfilling = (async () => {
+      try {
+        let embedded = 0;
+        for (;;) {
+          const targets = mem.embedTargets(embed.model, 64);
+          if (targets.length === 0) break;
+          const vecs = await embed.documents(targets.map(docText));
+          for (let i = 0; i < targets.length; i++) {
+            const v = vecs[i];
+            if (v !== undefined) mem.setEmbedding(targets[i]!.id, v, embed.model);
+          }
+          embedded += targets.length;
+        }
+        if (embedded > 0) {
+          process.stderr.write(`memharness: embedded ${embedded} fact(s) for hybrid recall\n`);
+        }
+      } catch {
+        // Model unavailable / offline → recall proceeds on whatever is embedded.
+      } finally {
+        backfilling = undefined;
+      }
+    })();
+    return backfilling;
+  };
   const server = new McpServer(
     { name: "memharness", version: "0.1.0" },
     {
@@ -253,9 +301,12 @@ export function createServer(
       // Embed the query for hybrid recall when an embedder is wired and there's
       // text to embed. Failure (model missing, etc.) silently degrades to FTS.
       let queryVector: Float32Array | undefined;
-      if (embedQuery && args.query !== undefined && args.query.trim() !== "") {
+      if (embed && args.query !== undefined && args.query.trim() !== "") {
         try {
-          queryVector = await embedQuery(args.query);
+          // Make sure stored facts are embedded before we lean on the vector
+          // leg, so a just-remembered fact is immediately recall-able.
+          await backfillEmbeddings();
+          queryVector = await embed.query(args.query);
         } catch {
           queryVector = undefined;
         }

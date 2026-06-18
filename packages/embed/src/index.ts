@@ -12,10 +12,39 @@ export const EMBED_DIM = 384;
 /** BGE wants this instruction prepended to *queries* (not to stored documents). */
 const QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: ";
 
+/** Subset of the transformers.js progress event we surface to callers. */
+export interface EmbedProgress {
+  status: string;
+  file?: string;
+  progress?: number;
+}
+
 let extractorPromise: Promise<FeatureExtractionPipeline> | undefined;
+let onProgress: ((p: EmbedProgress) => void) | undefined;
+
+/**
+ * Register a callback for model-load progress (download/initiate/done), so a
+ * host can show feedback during the one-time ~130MB BGE download instead of a
+ * silent ~20s stall. Must be set before the first embed call; ignored after the
+ * model is loaded. The library itself prints nothing.
+ */
+export function setEmbedProgress(fn: ((p: EmbedProgress) => void) | undefined): void {
+  onProgress = fn;
+}
 
 function getExtractor(): Promise<FeatureExtractionPipeline> {
-  extractorPromise ??= pipeline("feature-extraction", EMBED_MODEL);
+  extractorPromise ??= pipeline("feature-extraction", EMBED_MODEL, {
+    progress_callback: onProgress
+      ? (p: EmbedProgress) => {
+          onProgress?.(p);
+        }
+      : undefined,
+  }).then((extractor) => {
+    // transformers.js has no single "loaded" event; synthesize one so a host can
+    // tell when the one-time download/init finished.
+    onProgress?.({ status: "ready" });
+    return extractor;
+  });
   return extractorPromise;
 }
 

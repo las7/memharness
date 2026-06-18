@@ -169,6 +169,7 @@ export class Memharness {
         ...DEFAULT_RANKING.kindHalfLifeDays,
         ...opts.ranking?.kindHalfLifeDays,
       },
+      candidateCap: opts.ranking?.candidateCap ?? DEFAULT_RANKING.candidateCap,
     };
     return new Memharness(db, dbPath, opts.clock ?? new SystemClock(), ranking, vecEnabled);
   }
@@ -346,7 +347,13 @@ export class Memharness {
       // included whenever there's also a text query, so facts not yet embedded
       // still surface lexically; the vector leg backstops paraphrase.
       const { blob, dim } = toVecBlob(input.queryVector as Float32Array | number[]);
-      const vecParams = { ...params, rrfK: this.ranking.rrfK, queryVec: blob, queryDim: dim };
+      const vecParams = {
+        ...params,
+        rrfK: this.ranking.rrfK,
+        cap: this.ranking.candidateCap,
+        queryVec: blob,
+        queryDim: dim,
+      };
       if (query !== "") {
         const match = ftsPhrases(query).join(" OR ");
         try {
@@ -365,6 +372,19 @@ export class Memharness {
           vecParams,
         ) as typeof rows;
       }
+      if (query !== "" && rows.length === 0) {
+        // Both the lexical (FTS) and semantic (vector) legs whiffed — e.g. a
+        // partial word or typo against facts not yet embedded. Fall back to
+        // substring matching exactly as the FTS-only path does, so turning on
+        // hybrid recall never returns *fewer* results than the default.
+        usedFallback = true;
+        rows = this.prep(
+          sql.recallQuery({ fts: false, filters: [...filters, sql.LIKE_FILTER] }),
+        ).all({
+          ...params,
+          pattern: buildLikePattern(query),
+        }) as typeof rows;
+      }
     } else if (query !== "") {
       // Escalating match: all tokens → any token → substring. Each stage keeps
       // every temporal/subject filter; only the text predicate loosens.
@@ -378,6 +398,7 @@ export class Memharness {
             ...params,
             match,
             rrfK: this.ranking.rrfK,
+            cap: this.ranking.candidateCap,
           }) as typeof rows;
         } catch {
           rows = [];
@@ -452,12 +473,29 @@ export class Memharness {
       let validFrom = txAt;
       if (input.validFrom !== undefined) {
         validFrom = normalizeIso(input.validFrom, "validFrom");
-        // The old fact's validity closes at validFrom (world time), so the
-        // backdate must land inside [old.valid_from, txAt] or the two
-        // intervals would overlap or invert.
-        if (validFrom < old.valid_from || validFrom > txAt) {
+        // A revision can't be learned-in-the-future: validFrom is when the new
+        // state began in the world, never after now.
+        if (validFrom > txAt) {
           throw new ValidationError(
-            `validFrom must be within [${old.valid_from} (old fact's validFrom), ${txAt} (now)], got ${validFrom}`,
+            `validFrom cannot be in the future: got ${validFrom}, now is ${txAt}`,
+          );
+        }
+        // The old fact closes at validFrom (world time). If the old fact carries
+        // a real world-time start (it was itself backdated, valid_from < tx_at),
+        // a correction earlier than that would invert a meaningful interval, so
+        // we refuse. But when the old fact's valid_from is just its learning
+        // instant (valid_from === tx_at, never backdated), backdating the
+        // correction below it is the canonical "remember now, then learn it was
+        // actually true earlier" flow: the briefly-held old belief closes at the
+        // earlier instant, leaving it an empty interval (valid_to < valid_from)
+        // that is never 'current' and never surfaces at any as_of — exactly how
+        // the replay oracle models it — and the new belief takes over from
+        // validFrom. This keeps the documented 'moved last month' correction
+        // working instead of throwing.
+        const oldWasBackdated = old.valid_from < old.tx_at;
+        if (oldWasBackdated && validFrom < old.valid_from) {
+          throw new ValidationError(
+            `cannot backdate below the old fact's validFrom (${old.valid_from}); it was itself backdated, so an earlier correction would invert its validity interval. got ${validFrom}`,
           );
         }
       }

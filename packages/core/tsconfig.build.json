@@ -2,6 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": false,
+    "sourceMap": false,
     "outDir": "dist",
     "rootDir": "src",
     "types": ["node"]
