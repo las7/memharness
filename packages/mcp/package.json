@@ -3,9 +3,31 @@
   "version": "0.1.0",
   "description": "MCP server exposing memharness bi-temporal agent memory: remember, recall, revise, diff, why, forget, stats.",
   "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/las7/memharness.git",
+    "directory": "packages/mcp"
+  },
+  "homepage": "https://github.com/las7/memharness#readme",
+  "bugs": {
+    "url": "https://github.com/las7/memharness/issues"
+  },
+  "author": "las7",
+  "keywords": [
+    "memory",
+    "agent",
+    "mcp",
+    "model-context-protocol",
+    "llm",
+    "bi-temporal",
+    "provenance"
+  ],
   "type": "module",
   "engines": {
-    "node": ">=20.19"
+    "node": ">=22.13"
   },
   "bin": {
     "memharness-mcp": "dist/index.js",
@@ -27,11 +49,19 @@
   },
   "dependencies": {
     "@memharness/core": "workspace:*",
-    "@memharness/embed": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "zod": "^3.24.0"
   },
+  "peerDependencies": {
+    "@memharness/embed": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@memharness/embed": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@memharness/embed": "workspace:*",
     "@types/node": "^22.15.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.4"

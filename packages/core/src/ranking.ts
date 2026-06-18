@@ -24,6 +24,15 @@ export interface ResolvedRankingOptions {
   importanceHalfLifeWeight: number;
   /** Base half-life per memory kind (semantic falls back to halfLifeDays). */
   kindHalfLifeDays: Record<MemoryKind, number>;
+  /**
+   * Max candidate rows pulled from each rank list (FTS, vector) before the
+   * confidence/importance/decay scoring runs. Rows past this BM25/distance rank
+   * have an RRF leg so small they cannot realistically reach the returned top-k,
+   * so capping bounds the per-query scoring work (recall stays O(cap), not
+   * O(rows-matched)) without measurably changing ranking. Must exceed any
+   * realistic `limit`.
+   */
+  candidateCap: number;
 }
 
 export const DEFAULT_RANKING: ResolvedRankingOptions = {
@@ -32,6 +41,7 @@ export const DEFAULT_RANKING: ResolvedRankingOptions = {
   importanceWeight: 0.05,
   importanceHalfLifeWeight: 0.15,
   kindHalfLifeDays: { semantic: 90, episodic: 30, procedural: 180 },
+  candidateCap: 256,
 };
 
 /** Floor on the importance half-life factor so importance can never make decay non-positive. */

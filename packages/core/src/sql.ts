@@ -29,11 +29,6 @@ export const SUBJECT_FILTER = "f.subject = @subject";
 
 export const KIND_FILTER = "f.kind = @kind";
 
-export const FTS_JOIN = `JOIN (
-  SELECT rowid, row_number() OVER (ORDER BY rank) AS fts_rank
-  FROM facts_fts WHERE facts_fts MATCH @match
-) m ON m.rowid = f.id`;
-
 export const LIKE_FILTER = `(f.subject LIKE @pattern ESCAPE '\\'
   OR f.predicate LIKE @pattern ESCAPE '\\'
   OR f.fact LIKE @pattern ESCAPE '\\')`;
@@ -63,13 +58,29 @@ export const DECAY_EXPR = `pow(0.5, ${AGE_EXPR} / ${EFFECTIVE_HALFLIFE_EXPR})`;
 export const IMPORTANCE_BOOST_EXPR = "(1.0 + @importanceWeight * (f.importance - 5))";
 
 export function recallQuery(opts: { fts: boolean; filters: string[] }): string {
-  const rrf = opts.fts ? "(1.0 / (@rrfK + m.fts_rank))" : "1.0";
-  const join = opts.fts ? FTS_JOIN : "";
   const where = opts.filters.length > 0 ? `WHERE ${opts.filters.join(" AND ")}` : "";
+  if (opts.fts) {
+    // Drive from the (small, capped) FTS match set and look facts up by primary
+    // key, instead of scanning every current fact and probing FTS per row.
+    // MATERIALIZED pins that join order: without it SQLite drives from the ~88k
+    // current facts and the unfiltered keyword path degrades to ~12ms.
+    return `
+WITH m AS MATERIALIZED (
+  SELECT rowid AS id, row_number() OVER (ORDER BY rank) AS fts_rank
+  FROM facts_fts WHERE facts_fts MATCH @match
+  ORDER BY rank LIMIT @cap
+)
+SELECT f.*, m.fts_rank AS fts_rank,
+       (1.0 / (@rrfK + m.fts_rank)) * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} AS score
+FROM m CROSS JOIN facts f ON f.id = m.id
+${where}
+ORDER BY score DESC, f.tx_at DESC, f.id DESC
+LIMIT @limit`;
+  }
   return `
-SELECT f.*, ${opts.fts ? "m.fts_rank" : "NULL"} AS fts_rank,
-       ${rrf} * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} AS score
-FROM facts f ${join}
+SELECT f.*, NULL AS fts_rank,
+       1.0 * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} AS score
+FROM facts f
 ${where}
 ORDER BY score DESC, f.tx_at DESC, f.id DESC
 LIMIT @limit`;
@@ -126,13 +137,14 @@ export function hybridRecallQuery(opts: { fts: boolean; vec: boolean; filters: s
   if (opts.fts) {
     ctes.push(
       "fts AS (SELECT rowid AS id, row_number() OVER (ORDER BY rank) AS r " +
-        "FROM facts_fts WHERE facts_fts MATCH @match)",
+        "FROM facts_fts WHERE facts_fts MATCH @match ORDER BY rank LIMIT @cap)",
     );
   }
   if (opts.vec) {
     ctes.push(
       "vec AS (SELECT id, row_number() OVER (ORDER BY vec_distance_cosine(embedding, @queryVec)) AS r " +
-        "FROM facts WHERE embedding IS NOT NULL AND embedding_dim = @queryDim)",
+        "FROM facts WHERE embedding IS NOT NULL AND embedding_dim = @queryDim " +
+        "ORDER BY vec_distance_cosine(embedding, @queryVec) LIMIT @cap)",
     );
   }
   const ftsRrf = opts.fts ? "(CASE WHEN fts.id IS NULL THEN 0 ELSE 1.0/(@rrfK + fts.r) END)" : "0";

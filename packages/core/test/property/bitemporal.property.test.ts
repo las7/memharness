@@ -46,14 +46,19 @@ function runScenario(ops: Op[]): void {
           const targets = [...oracle.facts.values()].filter((f) => f.supersededBy === null);
           if (targets.length === 0) break;
           const target = targets[op.targetSeed % targets.length]!;
-          // Backdate clamped into [old.validFrom, now] so validation always
-          // passes; future-dated targets fall back to a plain revise.
+          // Backdate to now − backdateMs. If the target was itself backdated
+          // (validFrom < txAt, a real world-time interval) we must clamp at its
+          // validFrom or the revise inverts a meaningful interval and is
+          // rejected. But if the target was never backdated (validFrom === txAt,
+          // just a learning instant) the correction may land earlier — the
+          // "remember now, learn it was true earlier" flow — so we don't clamp.
+          // Future-dated targets fall back to a plain revise.
           const t = clock.peek();
           let validFrom: string | undefined;
           if (op.backdateMs > 0 && target.validFrom <= t) {
-            validFrom = new Date(
-              Math.max(Date.parse(t) - op.backdateMs, Date.parse(target.validFrom)),
-            ).toISOString();
+            const neverBackdated = target.validFrom === target.txAt;
+            const floor = neverBackdated ? 0 : Date.parse(target.validFrom);
+            validFrom = new Date(Math.max(Date.parse(t) - op.backdateMs, floor)).toISOString();
           }
           const { newId, txAt } = mem.revise({
             oldFactId: target.id,

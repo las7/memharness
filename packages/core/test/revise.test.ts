@@ -84,12 +84,12 @@ describe("revise", () => {
     expect(ids(mem.recall({ asOf: backdate }))).not.toContain(old);
   });
 
-  it("rejects a validFrom outside [old.validFrom, now] (would overlap or invert intervals)", () => {
+  it("rejects backdating below a fact that was ITSELF backdated (would invert a real interval)", () => {
     const { mem } = openTestDb("2026-06-01T00:00:00.000Z");
     const old = mem.remember({
       subject: "user",
       fact: "works at A",
-      validFrom: "2026-05-01T00:00:00.000Z",
+      validFrom: "2026-05-01T00:00:00.000Z", // a real world-time start, before now
     }).id;
     // before the old fact even started
     expect(() =>
@@ -99,6 +99,32 @@ describe("revise", () => {
     expect(() =>
       mem.revise({ oldFactId: old, newFact: "works at B", validFrom: "2027-01-01T00:00:00.000Z" }),
     ).toThrow(ValidationError);
+  });
+
+  it("backdates a revise of a just-remembered fact (the README 'moved last month' flow)", () => {
+    // Remember now (valid_from defaults to tx_at), then learn it was actually
+    // true earlier. This is the documented Library-use example; it must not throw.
+    const { mem } = openTestDb("2026-06-01T00:00:00.000Z");
+    const old = mem.remember({ subject: "user", fact: "lives in Osaka" }).id;
+    const { newId } = mem.revise({
+      oldFactId: old,
+      newFact: "lives in Tokyo",
+      validFrom: "2026-05-01T00:00:00.000Z", // before old.validFrom, but old was never backdated
+    });
+
+    // The new belief is current and carries the backdated validFrom.
+    expect(ids(mem.recall({ query: "lives" }))).toEqual([newId]);
+    expect(mem.why(newId).fact.validFrom).toBe("2026-05-01T00:00:00.000Z");
+
+    // The briefly-held old belief is closed, never current, and surfaces at no
+    // as_of (its interval is empty: valid_to < valid_from).
+    const oldRow = mem.why(old).fact;
+    expect(oldRow.supersededBy).toBe(newId);
+    expect(oldRow.validTo).toBe("2026-05-01T00:00:00.000Z");
+    expect(ids(mem.recall({}))).not.toContain(old);
+    // Nothing was learned by mid-May, so the belief set then is empty (honest
+    // bi-temporality: as_of uses tx_at, and both facts were learned on Jun 1).
+    expect(ids(mem.recall({ asOf: "2026-05-15T00:00:00.000Z" }))).toEqual([]);
   });
 
   it("quotes the chain head's id and text when revising a superseded fact", () => {

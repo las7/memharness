@@ -8,13 +8,20 @@ async function connected(embedQuery?: (text: string) => Promise<Float32Array>) {
   const mem = Memharness.open({ dbPath: ":memory:", clock: new FakeClock() });
   const usage: string[] = [];
   const metas: Array<Record<string, unknown> | undefined> = [];
+  const embed = embedQuery
+    ? {
+        model: "test",
+        query: embedQuery,
+        documents: (texts: string[]) => Promise.all(texts.map(embedQuery)),
+      }
+    : undefined;
   const server = createServer(
     mem,
     (op, meta) => {
       usage.push(op);
       metas.push(meta);
     },
-    embedQuery,
+    embed,
   );
   const client = new Client({ name: "test", version: "0.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -222,6 +229,28 @@ describe("memharness MCP server", () => {
     mem.setEmbedding(b, [0, 1, 0], "test");
 
     // "beverage" lexically matches neither fact; the vector leg still finds "oolong"
+    const r = await client.callTool({ name: "recall", arguments: { query: "beverage" } });
+    expect(textOf(r)).toContain("drinks oolong");
+    expect(metas.at(-1)?.hybrid).toBe(true);
+  });
+
+  it("auto-embeds facts written via the tool, so hybrid recall needs no manual reembed", async () => {
+    const embed = async (text: string): Promise<Float32Array> =>
+      Float32Array.from(/tea|beverage|drink|oolong/i.test(text) ? [1, 0, 0] : [0, 1, 0]);
+    const { client, metas } = await connected(embed);
+
+    // Written through the remember tool only — never manually setEmbedding'd.
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "drinks oolong" },
+    });
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "deploys on fridays" },
+    });
+
+    // The server backfills embeddings on recall, so the vector leg finds the
+    // semantically-near fact despite no lexical overlap and no reembed pass.
     const r = await client.callTool({ name: "recall", arguments: { query: "beverage" } });
     expect(textOf(r)).toContain("drinks oolong");
     expect(metas.at(-1)?.hybrid).toBe(true);

@@ -53,6 +53,8 @@ export interface RankingOptions {
   importanceHalfLifeWeight?: number;
   /** Base half-life per kind. Defaults: semantic 90, episodic 30, procedural 180. */
   kindHalfLifeDays?: Partial<Record<MemoryKind, number>>;
+  /** Max candidate rows scored per rank list (FTS, vector) before ranking. Default 256. */
+  candidateCap?: number;
 }
 
 export interface MemharnessOptions {
