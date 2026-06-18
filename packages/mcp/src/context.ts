@@ -69,9 +69,10 @@ try {
     process.stdout.write(`${out.join("\n\n")}\n`);
   }
 
-  // Dogfood-gate instrumentation, same shape as the MCP server's. A distinct
-  // op keeps hook injections from inflating agent-initiated recall counts.
-  if (dbPath !== ":memory:") {
+  // Optional local instrumentation, same shape and gating as the MCP server's
+  // (off unless MEMHARNESS_DEBUG=1). A distinct op keeps hook injections from
+  // inflating agent-initiated recall counts.
+  if (process.env.MEMHARNESS_DEBUG === "1" && dbPath !== ":memory:") {
     try {
       appendFileSync(
         join(dirname(dbPath), "usage.log"),

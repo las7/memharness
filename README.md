@@ -20,6 +20,12 @@ combines three semantics that incumbents tend to split apart:
 The storage layer is deterministic: no LLM, no network, no background daemon.
 It's plain SQLite, so you can open the file with any client.
 
+<p align="center">
+  <img src="assets/demo.gif" alt="An agent learns a deploy target, the user corrects it weeks later, and recall / as_of / why / diff explain what was believed when." width="840">
+</p>
+
+<p align="center"><em>Run it yourself: <code>cd examples &amp;&amp; npm install &amp;&amp; npm run demo</code></em></p>
+
 ## When to use this (and when not to)
 
 memharness is not a magic accuracy upgrade, and it is honest about that. If your
@@ -100,6 +106,42 @@ args = ["-y", "@memharness/mcp"]
 The database lives at `~/.memharness/memory.db` (override with `MEMHARNESS_DB`;
 `XDG_DATA_HOME` is honored on Linux). Nothing else is written unless you turn on
 the optional [debug log](#optional-local-usage-log).
+
+### First run
+
+1. Add the server with one of the commands above, then **restart your client**
+   so it picks up the new MCP server.
+2. In a conversation, hand the agent a durable fact, e.g. *"remember that I
+   deploy this project with Fly.io."* It calls `remember`.
+3. Later (or in a fresh session) ask *"what do you know about how I deploy?"* It
+   calls `recall` and answers from memory. Correct it and it calls `revise`;
+   the old belief becomes history, queryable with `as_of` / `why` / `diff`.
+
+No API key, no signup, no network. The first `remember` creates the SQLite file
+and that's the whole setup. To watch the tools work end to end without an agent,
+run the demo: `cd examples && npm install && npm run demo`.
+
+### Optional: make recall automatic
+
+By default the agent decides when to call `recall`. To *push* relevant memory in
+at the start of every session instead (more reliable than hoping the model
+remembers to look), add a Claude Code **SessionStart hook** that runs the
+bundled `memharness-context` tool, whose stdout is injected into context:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command",
+        "command": "npx -y -p @memharness/mcp memharness-context --subject user" } ] }
+    ]
+  }
+}
+```
+
+It prints a compact dump of the most relevant current beliefs (and exits quietly
+if there's nothing yet), so the agent starts each session already knowing the
+durable facts. Pass `--subject` more than once to inject several entities.
 
 ## The seven tools
 

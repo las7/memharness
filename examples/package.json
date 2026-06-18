@@ -1,0 +1,12 @@
+{
+  "name": "memharness-examples",
+  "private": true,
+  "type": "module",
+  "description": "Runnable demos for memharness (uses the published @memharness/core).",
+  "scripts": {
+    "demo": "node demo.mjs"
+  },
+  "dependencies": {
+    "@memharness/core": "^0.1.0"
+  }
+}
