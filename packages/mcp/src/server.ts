@@ -116,7 +116,7 @@ export function createServer(
     return backfilling;
   };
   const server = new McpServer(
-    { name: "memharness", version: "0.1.0" },
+    { name: "memharness", version: "0.1.1" },
     {
       instructions:
         "memharness is the agent's long-term memory. Use it proactively, not only when asked:\n" +

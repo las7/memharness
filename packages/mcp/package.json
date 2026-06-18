@@ -1,6 +1,6 @@
 {
   "name": "@memharness/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server exposing memharness bi-temporal agent memory: remember, recall, revise, diff, why, forget, stats.",
   "license": "Apache-2.0",
   "publishConfig": {
@@ -30,6 +30,7 @@
     "node": ">=22.13"
   },
   "bin": {
+    "mcp": "dist/index.js",
     "memharness-mcp": "dist/index.js",
     "memharness-context": "dist/context.js",
     "memharness-reembed": "dist/reembed.js",
