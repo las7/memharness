@@ -66,16 +66,31 @@ function looksLikeCodeMap(fact: string): boolean {
   return false;
 }
 
+/** Below this length a semicolon is likely punctuation in a short note, not a clause join. */
+const SEMICOLON_MIN_CHARS = 60;
+
 /**
  * Atomicity smell: a single remember should carry one assertion. A long fact made
  * of several sentences or semicolon-joined clauses is a compound briefing that
  * can't be revised piece by piece later. Returns the strongest nudge or null.
  * Conservative thresholds keep it quiet on normal one-or-two-sentence facts.
  */
-function atomicitySmell(fact: string): string | null {
+export function atomicitySmell(fact: string): string | null {
   const sentences = fact.split(/[.!?](?:\s|$)/).filter((s) => s.trim().length > 0).length;
   const semicolons = (fact.match(/;/g) ?? []).length;
-  if (fact.length > 320 && (sentences >= 3 || semicolons >= 2)) {
+  // A semicolon in a fact almost always joins two independent clauses — i.e. two
+  // assertions. This catches *short* compounds the length gates below miss (e.g.
+  // "X is las7 (id 123); the gh CLI is authenticated as las7"). Capped at 280 so
+  // longer facts fall through to the length messaging; floored so it stays quiet
+  // on terse notes like "a; b".
+  if (semicolons >= 1 && fact.length > SEMICOLON_MIN_CHARS && fact.length <= 280) {
+    return (
+      "a semicolon usually joins two independent clauses — this likely asserts more than one " +
+      "thing. Split it at the semicolon into one remember call per assertion so each can be " +
+      "revised independently."
+    );
+  }
+  if (fact.length > 320 && sentences >= 3) {
     return (
       "this asserts several things at once — split compound knowledge into one remember " +
       "call per assertion so each can be revised independently."
