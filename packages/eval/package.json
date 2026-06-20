@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
-    "eval": "node --import tsx src/runner.ts"
+    "eval": "node --import tsx src/runner.ts",
+    "sweep": "node --import tsx src/sweep.ts"
   },
   "dependencies": {
     "@memharness/core": "workspace:*"

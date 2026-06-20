@@ -91,8 +91,12 @@ async function buildVectorCache(dataset: Dataset, embedder: Embedder) {
   return { docByEventId, queryVecs };
 }
 
-function rankingFor(cfg: Config): RankingOptions | undefined {
-  const r: RankingOptions = {};
+/**
+ * Ranking options for one config arm, starting from an optional `base` (the value
+ * a parameter sweep is probing) and then applying the arm's ablations on top.
+ */
+function rankingFor(cfg: Config, base?: RankingOptions): RankingOptions | undefined {
+  const r: RankingOptions = { ...base };
   if (!cfg.importance) {
     r.importanceWeight = 0;
     r.importanceHalfLifeWeight = 0;
@@ -110,9 +114,10 @@ function replay(
   dataset: Dataset,
   cfg: Config,
   docByEventId: Map<string, Float32Array>,
+  base?: RankingOptions,
 ): { mem: Memharness; idMap: Map<string, number> } {
   const clock = new FakeClock(dataset.epoch, 0);
-  const mem = Memharness.open({ dbPath: ":memory:", clock, ranking: rankingFor(cfg) });
+  const mem = Memharness.open({ dbPath: ":memory:", clock, ranking: rankingFor(cfg, base) });
   const idMap = new Map<string, number>();
   let cursor = Date.parse(dataset.epoch);
   const advanceTo = (at: string) => {
@@ -158,13 +163,15 @@ function replay(
   return { mem, idMap };
 }
 
-export async function runEval(opts: { real?: boolean } = {}): Promise<EvalResult> {
+export async function runEval(
+  opts: { real?: boolean; ranking?: RankingOptions } = {},
+): Promise<EvalResult> {
   const embedder = opts.real ? await realEmbedder() : syntheticEmbedder();
   const { docByEventId, queryVecs } = await buildVectorCache(DATASET, embedder);
   const outcomes: ProbeOutcome[] = [];
 
   for (const cfg of CONFIGS) {
-    const { mem, idMap } = replay(DATASET, cfg, docByEventId);
+    const { mem, idMap } = replay(DATASET, cfg, docByEventId, opts.ranking);
     for (const p of DATASET.probes) {
       const gold = p.gold.map((g) => idMap.get(g)).filter((x): x is number => x !== undefined);
       const input: Parameters<Memharness["recall"]>[0] = {
