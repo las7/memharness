@@ -127,7 +127,11 @@ function replay(
       cursor = t;
     }
   };
-  for (const e of dataset.events) {
+  // advanceTo only moves forward, so events must be replayed in time order. Sort
+  // by timestamp (stable for ties) so the dataset can list events grouped by
+  // scenario rather than strictly interleaved by clock.
+  const events = [...dataset.events].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  for (const e of events) {
     advanceTo(e.at);
     if (e.op === "remember") {
       idMap.set(e.id, mem.remember(e).id);

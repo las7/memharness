@@ -115,6 +115,41 @@ export const DATASET: Dataset = {
       importance: 9,
     },
     { op: "stale", at: "2026-01-11T00:00:00.000Z", target: "guard_stale", freshness: "stale" },
+    // staleness GRADIENT: five subject-isolated scenarios where a stale fact is
+    // NEWER than a fresh one by a controlled day-gap, same importance. With no
+    // query the only score difference is recency × the staleness factor, so each
+    // scenario flips to the fresh fact only once staleWeight drops below
+    // 0.5^(gap/90): gaps 30/60/90/120/150 → thresholds ≈ 0.79/0.63/0.50/0.40/0.32.
+    // Sweeping staleWeight over these yields a gradient instead of a single step.
+    // (stale facts all dated 2026-05-31; EVAL_NOW is 2026-06-02.)
+    ...[
+      { n: 1, gap: "2026-05-01T00:00:00.000Z" }, // 30d  → flips below ~0.79
+      { n: 2, gap: "2026-04-01T00:00:00.000Z" }, // 60d  → ~0.63
+      { n: 3, gap: "2026-03-02T00:00:00.000Z" }, // 90d  → ~0.50
+      { n: 4, gap: "2026-01-31T00:00:00.000Z" }, // 120d → ~0.40
+      { n: 5, gap: "2026-01-01T00:00:00.000Z" }, // 150d → ~0.32
+    ].flatMap(({ n, gap }) => [
+      {
+        op: "remember" as const,
+        at: gap,
+        id: `freshN${n}`,
+        subject: `stale:${n}`,
+        fact: `scenario ${n} retrieval value`,
+      },
+      {
+        op: "remember" as const,
+        at: "2026-05-31T00:00:00.000Z",
+        id: `staleN${n}`,
+        subject: `stale:${n}`,
+        fact: `scenario ${n} retrieval value`,
+      },
+      {
+        op: "stale" as const,
+        at: "2026-06-01T12:00:00.000Z",
+        target: `staleN${n}`,
+        freshness: "stale" as const,
+      },
+    ]),
     // access fires late, reinforcing only the tea fact (matches "oolong")
     { op: "access", at: "2026-06-01T00:00:00.000Z", subject: "user:enjoy", query: "oolong" },
   ],
@@ -182,5 +217,12 @@ export const DATASET: Dataset = {
       k: 1,
       gold: ["guard_fresh"],
     },
+    ...[1, 2, 3, 4, 5].map((n) => ({
+      name: `staleness gradient ${n}: fresh outranks a newer-but-stale peer`,
+      category: "staleness" as const,
+      subject: `stale:${n}`,
+      k: 1,
+      gold: [`freshN${n}`],
+    })),
   ],
 };

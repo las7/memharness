@@ -7,8 +7,8 @@ describe("eval harness (synthetic, offline)", () => {
   it("scores every probe under every config arm", async () => {
     const r = await runEval();
     expect(r.embedder).toBe("synthetic");
-    // 6 configs × 8 probes
-    expect(r.outcomes).toHaveLength(48);
+    // 6 configs × 13 probes
+    expect(r.outcomes).toHaveLength(78);
   });
 
   it("source-staleness demotion helps: the staleness probe hits with it on, misses with it off", async () => {
