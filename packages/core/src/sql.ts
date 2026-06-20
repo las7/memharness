@@ -57,6 +57,17 @@ export const DECAY_EXPR = `pow(0.5, ${AGE_EXPR} / ${EFFECTIVE_HALFLIFE_EXPR})`;
 /** Direct salience multiplier: 1 + importanceWeight·(importance−5). */
 export const IMPORTANCE_BOOST_EXPR = "(1.0 + @importanceWeight * (f.importance - 5))";
 
+/**
+ * Source-staleness multiplier. 'stale'/'unresolved' demote; 'current', NULL
+ * (unpinned/unchecked), and any unknown value are neutral. Mirrors
+ * ranking.ts freshnessFactor.
+ */
+export const FRESHNESS_FACTOR_EXPR = `(CASE f.freshness
+  WHEN 'stale'      THEN @staleWeight
+  WHEN 'unresolved' THEN @unresolvedWeight
+  ELSE 1.0
+END)`;
+
 export function recallQuery(opts: { fts: boolean; filters: string[] }): string {
   const where = opts.filters.length > 0 ? `WHERE ${opts.filters.join(" AND ")}` : "";
   if (opts.fts) {
@@ -71,7 +82,7 @@ WITH m AS MATERIALIZED (
   ORDER BY rank LIMIT @cap
 )
 SELECT f.*, m.fts_rank AS fts_rank,
-       (1.0 / (@rrfK + m.fts_rank)) * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} AS score
+       (1.0 / (@rrfK + m.fts_rank)) * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} * ${FRESHNESS_FACTOR_EXPR} AS score
 FROM m CROSS JOIN facts f ON f.id = m.id
 ${where}
 ORDER BY score DESC, f.tx_at DESC, f.id DESC
@@ -79,12 +90,29 @@ LIMIT @limit`;
   }
   return `
 SELECT f.*, NULL AS fts_rank,
-       1.0 * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} AS score
+       1.0 * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} * ${FRESHNESS_FACTOR_EXPR} AS score
 FROM facts f
 ${where}
 ORDER BY score DESC, f.tx_at DESC, f.id DESC
 LIMIT @limit`;
 }
+
+/**
+ * Current beliefs for one subject, id + fact text only — the candidate set the
+ * write-path near-duplicate / contradiction check scores lexically in JS. Capped
+ * because a subject's live belief set is small; this is a pre-insert advisory, not
+ * a hot path. Pure read, no reinforce.
+ */
+export const CURRENT_SUBJECT_FACTS = `SELECT f.id, f.fact FROM facts f
+WHERE ${CURRENT_FILTER} AND ${SUBJECT_FILTER}
+LIMIT @cap`;
+
+/** Nearest current same-subject facts by cosine distance — the optional vector leg of nearDuplicates. */
+export const SUBJECT_VEC_NEIGHBORS = `SELECT f.id, vec_distance_cosine(f.embedding, @queryVec) AS dist
+FROM facts f
+WHERE ${CURRENT_FILTER} AND ${SUBJECT_FILTER}
+  AND f.embedding IS NOT NULL AND f.embedding_dim = @queryDim
+ORDER BY dist LIMIT @cap`;
 
 /** Reinforce-on-access: freshen last_accessed_at for the returned current-mode facts (ranking only). */
 export const REINFORCE_ACCESS =
@@ -160,7 +188,7 @@ export function hybridRecallQuery(opts: { fts: boolean; vec: boolean; filters: s
   return `
 WITH ${ctes.join(",\n")}
 SELECT f.*, ${opts.fts ? "fts.r" : "NULL"} AS fts_rank, ${opts.vec ? "vec.r" : "NULL"} AS vec_rank,
-       (${ftsRrf} + ${vecRrf}) * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} AS score
+       (${ftsRrf} + ${vecRrf}) * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} * ${FRESHNESS_FACTOR_EXPR} AS score
 FROM facts f ${joins}
 WHERE ${where}
 ORDER BY score DESC, f.tx_at DESC, f.id DESC

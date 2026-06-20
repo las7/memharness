@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // memharness memory gardener — a local hygiene pass over the belief set.
 // Read-only. Prints a short advisory ONLY when something needs attention, so it
-// can be wired into a SessionStart hook without adding noise. Catches the two
+// can be wired into a SessionStart hook without adding noise. Catches the
 // failure modes found dogfooding (2026-06-16):
 //   1. subject fragmentation (e.g. project:tako / project:tako-vm / project:TakoVM)
 //   2. code-map bloat (facts an Explore agent could reconstruct from the repo)
-// The staleness check (Phase 2 `memharness-staleness`) joins this once it exists.
+//   3. source staleness — pinned facts whose code moved past the commit they were
+//      read at (verdict written out-of-band by the `memharness-staleness` bin).
 //
 // Resolves better-sqlite3 from @memharness/core's deps, so run with node from
 // anywhere: `node packages/core/scripts/memory-gardener.mjs`.
@@ -32,11 +33,14 @@ const cols = new Set(
     .map((c) => c.name),
 );
 const hasPin = cols.has("source_commit");
+const hasFreshness = cols.has("freshness");
 
 const now = new Date().toISOString();
 const rows = db
   .prepare(
-    `SELECT id, subject, fact${hasPin ? ", source_commit" : ""}
+    `SELECT id, subject, fact${hasPin ? ", source_commit" : ""}${
+      hasFreshness ? ", freshness, source_path, checked_head" : ""
+    }
        FROM facts
       WHERE retracted_at IS NULL
         AND superseded_by IS NULL
@@ -85,8 +89,18 @@ const smelly = rows.filter(
     looksLikeCodeMap(r.fact),
 );
 
+// --- 3. Source staleness ------------------------------------------------------
+// The memharness-staleness bin diffs each pinned fact's source_commit against the
+// repo HEAD and writes a 'stale'/'unresolved' verdict. Surface those here so a
+// pinned fact whose code drifted (e.g. a security finding that has since been
+// fixed) gets reviewed instead of being recalled as still-true. Recall already
+// demotes these in ranking; this makes them actionable.
+const stale = hasFreshness ? rows.filter((r) => r.freshness === "stale") : [];
+const unresolved = hasFreshness ? rows.filter((r) => r.freshness === "unresolved") : [];
+
 // --- Report (only if something to say) ---------------------------------------
-if (fragmented.length === 0 && smelly.length === 0) process.exit(0);
+if (fragmented.length === 0 && smelly.length === 0 && stale.length === 0 && unresolved.length === 0)
+  process.exit(0);
 
 const out = ["memharness gardener — memory hygiene flags:"];
 if (fragmented.length) {
@@ -103,6 +117,27 @@ if (smelly.length) {
     out.push(`    - #${r.id} [${r.subject}] ${r.fact.slice(0, 70).replace(/\s+/g, " ")}…`);
   }
   if (smelly.length > 12) out.push(`    …and ${smelly.length - 12} more`);
+}
+if (stale.length) {
+  out.push(
+    `\n  ${stale.length} pinned fact(s) whose source code has MOVED past the commit they were read at (re-verify, then revise or retract — these are demoted in recall):`,
+  );
+  for (const r of stale.slice(0, 12)) {
+    const where = r.source_path ? ` ${r.source_path}` : "";
+    out.push(
+      `    - #${r.id} [${r.subject}]${where} — ${r.fact.slice(0, 64).replace(/\s+/g, " ")}…`,
+    );
+  }
+  if (stale.length > 12) out.push(`    …and ${stale.length - 12} more`);
+}
+if (unresolved.length) {
+  out.push(
+    `\n  ${unresolved.length} pinned fact(s) whose commit could not be verified (unknown/diverged SHA — repin or check the repo):`,
+  );
+  for (const r of unresolved.slice(0, 8)) {
+    out.push(`    - #${r.id} [${r.subject}] — ${r.fact.slice(0, 64).replace(/\s+/g, " ")}…`);
+  }
+  if (unresolved.length > 8) out.push(`    …and ${unresolved.length - 8} more`);
 }
 out.push("\n  (Ask Claude to review and clean these up when convenient.)");
 console.log(out.join("\n"));

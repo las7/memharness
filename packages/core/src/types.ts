@@ -40,6 +40,8 @@ export interface Fact {
 export interface Clock {
   /** Strictly increasing canonical ISO timestamps. */
   now(): string;
+  /** Current time WITHOUT advancing the clock — for read-only "as of now" filters. */
+  peek(): string;
 }
 
 export interface RankingOptions {
@@ -55,6 +57,10 @@ export interface RankingOptions {
   kindHalfLifeDays?: Partial<Record<MemoryKind, number>>;
   /** Max candidate rows scored per rank list (FTS, vector) before ranking. Default 256. */
   candidateCap?: number;
+  /** Score multiplier for facts flagged 'stale' by the staleness bin. Default 0.5. Set 1 to disable. */
+  staleWeight?: number;
+  /** Score multiplier for facts flagged 'unresolved'. Default 0.85. Set 1 to disable. */
+  unresolvedWeight?: number;
 }
 
 export interface MemharnessOptions {
@@ -87,6 +93,27 @@ export interface RememberInput {
 export interface RememberResult {
   id: number;
   txAt: string;
+}
+
+export interface NearDuplicatesInput {
+  /** Subject the prospective fact would be filed under (the conflict scope). */
+  subject: string;
+  /** The prospective fact text to compare against existing current beliefs. */
+  text: string;
+  /** Optional query embedding; when provided (and sqlite-vec is loaded) cosine similarity augments lexical overlap. */
+  queryVector?: Float32Array | number[];
+  /** Max candidates to return. Default 5. */
+  limit?: number;
+  /** Similarity floor in [0,1] for a fact to be surfaced. Default 0.5. */
+  minSimilarity?: number;
+}
+
+/** An existing current belief similar enough to a prospective fact to warrant a revise-vs-add decision. */
+export interface SimilarFact {
+  id: number;
+  fact: string;
+  /** Best of lexical (token Jaccard) and, when available, vector cosine similarity, in [0,1]. */
+  similarity: number;
 }
 
 export interface RecallInput {

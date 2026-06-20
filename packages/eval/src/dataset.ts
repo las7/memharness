@@ -94,6 +94,27 @@ export const DATASET: Dataset = {
       subject: "user",
       fact: "adopted a tabby cat named Mochi",
     },
+    // staleness: two facts matching the same query under one subject. The STALE
+    // one is newer AND higher-importance, so it wins on every other axis — only
+    // the source-staleness demotion can let the fresh one surface at k=1. (The
+    // hybrid-noStale ablation arm therefore fails this probe.)
+    {
+      op: "remember",
+      at: "2026-01-09T00:00:00.000Z",
+      id: "guard_fresh",
+      subject: "project:guard",
+      fact: "the nesting guard rejects deeply nested html input",
+      importance: 5,
+    },
+    {
+      op: "remember",
+      at: "2026-01-10T00:00:00.000Z",
+      id: "guard_stale",
+      subject: "project:guard",
+      fact: "the nesting guard rejects deeply nested html input",
+      importance: 9,
+    },
+    { op: "stale", at: "2026-01-11T00:00:00.000Z", target: "guard_stale", freshness: "stale" },
     // access fires late, reinforcing only the tea fact (matches "oolong")
     { op: "access", at: "2026-06-01T00:00:00.000Z", subject: "user:enjoy", query: "oolong" },
   ],
@@ -152,6 +173,14 @@ export const DATASET: Dataset = {
       query: "preferred mode of transport",
       k: 3,
       gold: ["commute"],
+    },
+    {
+      name: "fresh fact outranks a newer-but-stale duplicate",
+      category: "staleness",
+      subject: "project:guard",
+      query: "nesting guard nested html input",
+      k: 1,
+      gold: ["guard_fresh"],
     },
   ],
 };

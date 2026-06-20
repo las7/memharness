@@ -16,6 +16,7 @@ import type {
   ForgetResult,
   MemharnessOptions,
   MemoryKind,
+  NearDuplicatesInput,
   RecallInput,
   RecallResult,
   RememberInput,
@@ -23,6 +24,7 @@ import type {
   ReviseInput,
   ReviseResult,
   ScoredFact,
+  SimilarFact,
   StatsResult,
   WhyResult,
 } from "./types.js";
@@ -124,6 +126,59 @@ function buildLikePattern(query: string): string {
   return `%${query.replaceAll(/[\\%_]/g, (m) => `\\${m}`)}%`;
 }
 
+/**
+ * Significant-token set for lexical overlap: lowercased alphanumeric runs of >=3
+ * chars, minus a tiny stop set. Deliberately simple and dependency-free — this
+ * feeds a write-time advisory, not retrieval ranking, so precision over recall.
+ */
+const STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "are",
+  "was",
+  "but",
+  "not",
+  "you",
+  "all",
+  "any",
+  "can",
+  "her",
+  "his",
+  "its",
+  "our",
+  "out",
+  "use",
+  "with",
+  "this",
+  "that",
+  "from",
+  "into",
+  "than",
+  "then",
+  "they",
+  "them",
+  "your",
+  "have",
+  "has",
+  "had",
+  "will",
+]);
+function tokenSet(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const t of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (t.length >= 3 && !STOPWORDS.has(t)) out.add(t);
+  }
+  return out;
+}
+/** Jaccard overlap of two token sets, in [0,1]; 0 when either is empty. */
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
 /** Pack a float vector into a little-endian Float32 BLOB for sqlite-vec, with its dimension. */
 function toVecBlob(vector: Float32Array | number[]): { blob: Buffer; dim: number } {
   const f32 = vector instanceof Float32Array ? vector : Float32Array.from(vector);
@@ -170,6 +225,8 @@ export class Memharness {
         ...opts.ranking?.kindHalfLifeDays,
       },
       candidateCap: opts.ranking?.candidateCap ?? DEFAULT_RANKING.candidateCap,
+      staleWeight: opts.ranking?.staleWeight ?? DEFAULT_RANKING.staleWeight,
+      unresolvedWeight: opts.ranking?.unresolvedWeight ?? DEFAULT_RANKING.unresolvedWeight,
     };
     return new Memharness(db, dbPath, opts.clock ?? new SystemClock(), ranking, vecEnabled);
   }
@@ -300,6 +357,61 @@ export class Memharness {
     return { id: Number(result.lastInsertRowid), txAt };
   }
 
+  /**
+   * Current beliefs under `subject` that are similar enough to a prospective fact
+   * to warrant a revise-vs-add decision — the read half of the write-path
+   * contradiction/dedup gate. Pure read: no reinforce, no write. Lexical token
+   * Jaccard always applies; when a queryVector is supplied and sqlite-vec is
+   * loaded, cosine similarity is folded in (max of the two) so paraphrases that
+   * share few words still surface. Advisory by design — callers decide whether to
+   * revise an existing belief or proceed; nothing is blocked.
+   */
+  nearDuplicates(input: NearDuplicatesInput): SimilarFact[] {
+    const subject = requireText(input.subject, "subject");
+    const text = requireText(input.text, "text");
+    const limit = input.limit ?? 5;
+    const minSimilarity = input.minSimilarity ?? 0.5;
+    const cap = 1000;
+    // peek(), not now(): this is a pure read and must not consume a timestamp
+    // (which would perturb bi-temporal ordering of the write that follows it).
+    const now = this.clock.peek();
+
+    const queryTokens = tokenSet(text);
+    const sim = new Map<number, { fact: string; similarity: number }>();
+    const rows = this.prep(sql.CURRENT_SUBJECT_FACTS).all({ now, subject, cap }) as Array<{
+      id: number;
+      fact: string;
+    }>;
+    for (const r of rows) {
+      sim.set(r.id, { fact: r.fact, similarity: jaccard(queryTokens, tokenSet(r.fact)) });
+    }
+
+    const useVec =
+      this.vecEnabled && input.queryVector !== undefined && input.queryVector.length > 0;
+    if (useVec) {
+      const { blob, dim } = toVecBlob(input.queryVector as Float32Array | number[]);
+      const neighbors = this.prep(sql.SUBJECT_VEC_NEIGHBORS).all({
+        now,
+        subject,
+        cap,
+        queryVec: blob,
+        queryDim: dim,
+      }) as Array<{ id: number; dist: number }>;
+      for (const n of neighbors) {
+        // cosine distance in [0,2] → similarity in [-1,1], clamped to [0,1].
+        const cos = Math.max(0, Math.min(1, 1 - n.dist));
+        const cur = sim.get(n.id);
+        if (cur !== undefined) cur.similarity = Math.max(cur.similarity, cos);
+      }
+    }
+
+    return [...sim.entries()]
+      .map(([id, v]) => ({ id, fact: v.fact, similarity: v.similarity }))
+      .filter((s) => s.similarity >= minSimilarity)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+  }
+
   recall(input: RecallInput = {}): RecallResult {
     const query = (input.query ?? "").trim();
     const subject = (input.subject ?? "").trim();
@@ -326,6 +438,8 @@ export class Memharness {
       importanceWeight: this.ranking.importanceWeight,
       importanceHlWeight: this.ranking.importanceHalfLifeWeight,
       minHlFactor: MIN_HALFLIFE_FACTOR,
+      staleWeight: this.ranking.staleWeight,
+      unresolvedWeight: this.ranking.unresolvedWeight,
       limit,
     };
     if (asOf !== null) params.asOf = asOf;

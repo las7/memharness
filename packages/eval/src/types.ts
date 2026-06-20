@@ -8,7 +8,8 @@ export type Category =
   | "temporal"
   | "multi-session"
   | "importance"
-  | "reinforce";
+  | "reinforce"
+  | "staleness";
 
 /** A timed event replayed to build the memory state. `id` names the created fact. */
 export type Event =
@@ -24,7 +25,9 @@ export type Event =
   | { op: "revise"; at: string; id: string; target: string; fact: string; importance?: number }
   | { op: "forget"; at: string; target: string }
   /** An access that reinforces matching facts (current-mode recall) before a later probe. */
-  | { op: "access"; at: string; subject?: string; query?: string };
+  | { op: "access"; at: string; subject?: string; query?: string }
+  /** Mark a created fact's source-staleness verdict, as the staleness bin would. */
+  | { op: "stale"; at: string; target: string; freshness?: "stale" | "unresolved" };
 
 /** A query with the fact ids that should appear in the top-k. */
 export interface Probe {
