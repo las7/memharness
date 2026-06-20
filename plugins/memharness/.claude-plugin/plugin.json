@@ -1,0 +1,11 @@
+{
+  "name": "memharness",
+  "description": "Long-term memory for Claude Code. Bundles the memharness MCP server (7 tools: remember, recall, revise, diff, why, forget, stats), a SessionStart hook that injects relevant memories, a PostToolUse hook that nudges durable-fact capture after git commits, and a skill carrying the proactive-use policy.",
+  "version": "0.1.0",
+  "author": {
+    "name": "las7"
+  },
+  "homepage": "https://github.com/las7/memharness",
+  "repository": "https://github.com/las7/memharness",
+  "license": "Apache-2.0"
+}
