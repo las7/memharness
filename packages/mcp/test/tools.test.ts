@@ -41,6 +41,33 @@ describe("memharness MCP server", () => {
     expect(tools).toEqual(["diff", "forget", "recall", "remember", "revise", "stats", "why"]);
   });
 
+  it("flags a near-duplicate same-subject belief and points to revise, without blocking the write", async () => {
+    const { client } = await connected();
+    await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "prefers no em-dashes in prose, use commas instead" },
+    });
+    const dup = await client.callTool({
+      name: "remember",
+      arguments: {
+        subject: "user",
+        fact: "prefers no em-dashes in product copy, use commas instead",
+      },
+    });
+    // The write still succeeds (advisory, not a block)...
+    expect(textOf(dup)).toContain("Remembered as fact #2.");
+    // ...and the advisory names the prior belief and steers toward revise.
+    expect(textOf(dup)).toContain("#1");
+    expect(textOf(dup)).toContain("revise");
+
+    // A genuinely unrelated fact in the same subject gets no such nudge.
+    const fresh = await client.callTool({
+      name: "remember",
+      arguments: { subject: "user", fact: "ships TakoVM on PyPI under the las7 account" },
+    });
+    expect(textOf(fresh)).toBe("Remembered as fact #3.");
+  });
+
   it("round-trips remember → recall → revise → why → diff → forget → stats", async () => {
     const { client, usage } = await connected();
 

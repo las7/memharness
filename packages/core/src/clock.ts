@@ -15,6 +15,11 @@ export class SystemClock implements Clock {
     this.lastMs = ms;
     return new Date(ms).toISOString();
   }
+
+  /** Current time WITHOUT advancing — for read-only "as of now" filters. */
+  peek(): string {
+    return new Date(Math.max(Date.now(), this.lastMs)).toISOString();
+  }
 }
 
 /** Deterministic clock for tests. Starts at a fixed epoch; advance manually or per-call. */

@@ -11,6 +11,13 @@ export interface ScoreInput {
   /** Caller-supplied salience, 1..10. 5 = neutral pivot. */
   importance: number;
   kind: MemoryKind;
+  /**
+   * Out-of-band source-staleness verdict (the memharness-staleness bin). A fact
+   * whose pinned code has moved past it ('stale') is demoted; one we can't verify
+   * ('unresolved') is demoted more gently. null/undefined (unpinned or unchecked)
+   * is neutral — so activating demotion never disturbs facts nobody pinned.
+   */
+  freshness?: "current" | "stale" | "unresolved" | null;
 }
 
 export interface ResolvedRankingOptions {
@@ -22,6 +29,10 @@ export interface ResolvedRankingOptions {
   importanceWeight: number;
   /** Half-life modulation slope per importance step from 5. */
   importanceHalfLifeWeight: number;
+  /** Score multiplier for facts the staleness bin marked 'stale' (pinned code moved past them). */
+  staleWeight: number;
+  /** Score multiplier for facts marked 'unresolved' (pin can't be verified — unknown/diverged SHA). */
+  unresolvedWeight: number;
   /** Base half-life per memory kind (semantic falls back to halfLifeDays). */
   kindHalfLifeDays: Record<MemoryKind, number>;
   /**
@@ -42,10 +53,26 @@ export const DEFAULT_RANKING: ResolvedRankingOptions = {
   importanceHalfLifeWeight: 0.15,
   kindHalfLifeDays: { semantic: 90, episodic: 30, procedural: 180 },
   candidateCap: 256,
+  staleWeight: 0.5,
+  unresolvedWeight: 0.85,
 };
 
 /** Floor on the importance half-life factor so importance can never make decay non-positive. */
 export const MIN_HALFLIFE_FACTOR = 0.05;
+
+/**
+ * Source-staleness multiplier. Neutral (1) for current, null, or undefined — the
+ * default for the vast majority of facts (unpinned or not-yet-checked) — so
+ * turning demotion on only touches facts the bin actually flagged.
+ */
+export function freshnessFactor(
+  opts: ResolvedRankingOptions,
+  freshness: ScoreInput["freshness"],
+): number {
+  if (freshness === "stale") return opts.staleWeight;
+  if (freshness === "unresolved") return opts.unresolvedWeight;
+  return 1;
+}
 
 /** base(kind) × (1 + importanceHalfLifeWeight·(importance−5)), floored. */
 export function effectiveHalfLife(
@@ -62,13 +89,14 @@ export function effectiveHalfLife(
 }
 
 /**
- * score = RRF × confidence × importanceBoost × recency-decay.
+ * score = RRF × confidence × importanceBoost × recency-decay × freshnessFactor.
  * RRF sums the available rank lists (FTS + vector); rank-free results (no
  * text/vector query, or LIKE fallback) get an RRF factor of 1. importanceBoost
  * = 1 + importanceWeight·(importance−5). Decay is 0.5^(ageDays / effectiveHalfLife),
  * where age is measured from the last access (reinforce-on-access) or, failing
- * that, txAt. This is mirrored bit-for-bit in sql.ts recallQuery — the
- * score-parity test pins the two together.
+ * that, txAt. freshnessFactor demotes facts whose pinned source has gone stale.
+ * This is mirrored bit-for-bit in sql.ts recallQuery — the score-parity test
+ * pins the two together.
  */
 export function score(input: ScoreInput, opts: ResolvedRankingOptions): number {
   const ftsRrf = input.ftsRank === null ? 0 : 1 / (opts.rrfK + input.ftsRank);
@@ -78,5 +106,5 @@ export function score(input: ScoreInput, opts: ResolvedRankingOptions): number {
   const boost = 1 + opts.importanceWeight * (input.importance - 5);
   const decay =
     0.5 ** (Math.max(0, input.ageDays) / effectiveHalfLife(opts, input.kind, input.importance));
-  return rrf * input.confidence * boost * decay;
+  return rrf * input.confidence * boost * decay * freshnessFactor(opts, input.freshness);
 }

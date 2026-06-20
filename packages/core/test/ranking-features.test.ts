@@ -46,6 +46,88 @@ describe("SQL/TS score parity", () => {
   });
 });
 
+describe("source-staleness demotion", () => {
+  it("ranks a fresh fact above an otherwise-identical stale one", () => {
+    const { mem } = openTestDb();
+    const stale = mem.remember({ subject: "p", fact: "alpha config", sourceCommit: "deadbee" }).id;
+    const fresh = mem.remember({ subject: "p", fact: "alpha config", sourceCommit: "cafef00" }).id;
+    // Same query rank, confidence, importance, age — only freshness differs.
+    mem.setStaleness(stale, {
+      freshness: "stale",
+      checkedAt: "2026-01-02T00:00:00.000Z",
+      checkedHead: "abc1234",
+    });
+    mem.setStaleness(fresh, {
+      freshness: "current",
+      checkedAt: "2026-01-02T00:00:00.000Z",
+      checkedHead: "abc1234",
+    });
+    const got = mem.recall({ query: "alpha", subject: "p" }).facts;
+    expect(got[0]!.id).toBe(fresh);
+    expect(got[1]!.id).toBe(stale);
+    mem.close();
+  });
+
+  it("unresolved demotes more gently than stale", () => {
+    const { mem } = openTestDb();
+    const stale = mem.remember({ subject: "p", fact: "beta note", sourceCommit: "deadbee" }).id;
+    const unresolved = mem.remember({
+      subject: "p",
+      fact: "beta note",
+      sourceCommit: "cafef00",
+    }).id;
+    mem.setStaleness(stale, {
+      freshness: "stale",
+      checkedAt: "2026-01-02T00:00:00.000Z",
+      checkedHead: "abc1234",
+    });
+    mem.setStaleness(unresolved, {
+      freshness: "unresolved",
+      checkedAt: "2026-01-02T00:00:00.000Z",
+      checkedHead: "abc1234",
+    });
+    const got = mem.recall({ query: "beta", subject: "p" }).facts;
+    expect(got[0]!.id).toBe(unresolved); // unresolvedWeight (0.85) > staleWeight (0.5)
+    expect(got[1]!.id).toBe(stale);
+    mem.close();
+  });
+
+  it("SQL score matches ranking.score() with a freshness factor applied", () => {
+    const clock = new FakeClock("2026-01-01T00:00:00.000Z", 0);
+    const mem = Memharness.open({ dbPath: ":memory:", clock });
+    const verdicts = ["stale", "unresolved", "current"] as const;
+    const ids = verdicts.map(
+      (_, i) => mem.remember({ subject: `g${i}`, fact: `gamma ${i}`, sourceCommit: "abc1234" }).id,
+    );
+    verdicts.forEach((v, i) =>
+      mem.setStaleness(ids[i]!, {
+        freshness: v,
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        checkedHead: "h",
+      }),
+    );
+    for (let i = 0; i < verdicts.length; i++) {
+      clock.advance(DAY);
+      const now = clock.peek();
+      const f = mem.recall({ subject: `g${i}` }).facts[0]!;
+      const ageDays = (Date.parse(now) - Date.parse(f.txAt)) / DAY;
+      const expected = score(
+        {
+          ftsRank: null,
+          confidence: 1.0,
+          ageDays,
+          importance: 5,
+          kind: "semantic",
+          freshness: verdicts[i],
+        },
+        DEFAULT_RANKING,
+      );
+      expect(f.score).toBeCloseTo(expected, 6);
+    }
+    mem.close();
+  });
+});
+
 describe("importance ranking", () => {
   it("ranks a high-importance fact above a neutral one, all else equal", () => {
     const { mem } = openTestDb();

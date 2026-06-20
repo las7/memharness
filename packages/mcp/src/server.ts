@@ -67,6 +67,27 @@ function looksLikeCodeMap(fact: string): boolean {
 }
 
 /**
+ * Atomicity smell: a single remember should carry one assertion. A long fact made
+ * of several sentences or semicolon-joined clauses is a compound briefing that
+ * can't be revised piece by piece later. Returns the strongest nudge or null.
+ * Conservative thresholds keep it quiet on normal one-or-two-sentence facts.
+ */
+function atomicitySmell(fact: string): string | null {
+  const sentences = fact.split(/[.!?](?:\s|$)/).filter((s) => s.trim().length > 0).length;
+  const semicolons = (fact.match(/;/g) ?? []).length;
+  if (fact.length > 320 && (sentences >= 3 || semicolons >= 2)) {
+    return (
+      "this asserts several things at once — split compound knowledge into one remember " +
+      "call per assertion so each can be revised independently."
+    );
+  }
+  if (fact.length > 280) {
+    return "that fact is long — split compound knowledge into separate remember calls so each piece can be revised independently.";
+  }
+  return null;
+}
+
+/**
  * Wraps a Memharness instance as an MCP server. logUsage receives the op name
  * only (dogfood-gate instrumentation; never fact content).
  */
@@ -230,6 +251,15 @@ export function createServer(
         if (args.fact.length > MAX_FACT_CHARS) {
           return `Not stored: ${args.fact.length} characters is a briefing note, not a fact. Split it into separate remember calls, one assertion each, and try again.`;
         }
+        // Contradiction/dedup gate: surface existing current beliefs in the same
+        // subject that this fact closely resembles, BEFORE inserting (so it isn't
+        // compared to itself). Advisory only — the write still proceeds; the agent
+        // decides whether to revise an existing belief instead of forking it.
+        const similar = mem.nearDuplicates({
+          subject: args.subject,
+          text: args.fact,
+          limit: 3,
+        });
         const r = mem.remember({
           subject: args.subject,
           fact: args.fact,
@@ -245,12 +275,16 @@ export function createServer(
         });
         // In-result feedback steers models far better than upfront instructions.
         const nudges: string[] = [];
-        if (args.fact.length > 280) {
+        if (similar.length > 0) {
+          const list = similar.map((s) => `#${s.id} (sim ${s.similarity.toFixed(2)})`).join(", ");
+          const them = similar.length > 1 ? "one of them" : "it";
           nudges.push(
-            "that fact is long — next time split compound knowledge into separate remember " +
-              "calls so each piece can be revised independently.",
+            `this closely resembles existing belief(s) in '${args.subject}': ${list} — if it ` +
+              `updates or contradicts ${them}, use revise (not a parallel fact) so history stays clean.`,
           );
         }
+        const atomicity = atomicitySmell(args.fact);
+        if (atomicity) nudges.push(atomicity);
         // Code-map smell: a long, path/symbol-dense fact an Explore agent could
         // reconstruct from the repo. Advisory only — never blocks the write.
         if (args.source_commit === undefined && looksLikeCodeMap(args.fact)) {

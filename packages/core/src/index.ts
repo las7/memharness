@@ -19,6 +19,7 @@ export type {
   ForgetResult,
   MemharnessOptions,
   MemoryKind,
+  NearDuplicatesInput,
   RankingOptions,
   RecallInput,
   RecallResult,
@@ -27,6 +28,7 @@ export type {
   ReviseInput,
   ReviseResult,
   ScoredFact,
+  SimilarFact,
   StatsResult,
   WhyResult,
 } from "./types.js";
