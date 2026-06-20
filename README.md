@@ -1,5 +1,7 @@
 # memharness
 
+<!-- mcp-name: io.github.las7/memharness -->
+
 **A bi-temporal, provenance-carrying memory primitive for AI agents.** One
 SQLite file. No LLM or network calls in the storage layer. Exposed to any agent
 via MCP.

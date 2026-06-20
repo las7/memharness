@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.las7/memharness",
+  "description": "Bi-temporal, provenance-carrying long-term memory for AI agents, in one SQLite file.",
+  "repository": {
+    "url": "https://github.com/las7/memharness",
+    "source": "github"
+  },
+  "version": "0.1.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@memharness/mcp",
+      "version": "0.1.2",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MEMHARNESS_DB",
+          "description": "Path to the SQLite memory file. Defaults to a per-user data path; set to override.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
