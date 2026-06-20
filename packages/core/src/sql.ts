@@ -79,7 +79,7 @@ export function recallQuery(opts: { fts: boolean; filters: string[] }): string {
 WITH m AS MATERIALIZED (
   SELECT rowid AS id, row_number() OVER (ORDER BY rank) AS fts_rank
   FROM facts_fts WHERE facts_fts MATCH @match
-  ORDER BY rank LIMIT @cap
+  ORDER BY rank LIMIT max(@limit, @cap)
 )
 SELECT f.*, m.fts_rank AS fts_rank,
        (1.0 / (@rrfK + m.fts_rank)) * f.confidence * ${IMPORTANCE_BOOST_EXPR} * ${DECAY_EXPR} * ${FRESHNESS_FACTOR_EXPR} AS score
@@ -165,14 +165,14 @@ export function hybridRecallQuery(opts: { fts: boolean; vec: boolean; filters: s
   if (opts.fts) {
     ctes.push(
       "fts AS (SELECT rowid AS id, row_number() OVER (ORDER BY rank) AS r " +
-        "FROM facts_fts WHERE facts_fts MATCH @match ORDER BY rank LIMIT @cap)",
+        "FROM facts_fts WHERE facts_fts MATCH @match ORDER BY rank LIMIT max(@limit, @cap))",
     );
   }
   if (opts.vec) {
     ctes.push(
       "vec AS (SELECT id, row_number() OVER (ORDER BY vec_distance_cosine(embedding, @queryVec)) AS r " +
         "FROM facts WHERE embedding IS NOT NULL AND embedding_dim = @queryDim " +
-        "ORDER BY vec_distance_cosine(embedding, @queryVec) LIMIT @cap)",
+        "ORDER BY vec_distance_cosine(embedding, @queryVec) LIMIT max(@limit, @cap))",
     );
   }
   const ftsRrf = opts.fts ? "(CASE WHEN fts.id IS NULL THEN 0 ELSE 1.0/(@rrfK + fts.r) END)" : "0";

@@ -18,15 +18,48 @@ export function resolveDefaultDbPath(
   return join(homedir(), ".memharness", "memory.db");
 }
 
-export function openDatabase(dbPath: string): Database.Database {
-  if (dbPath !== ":memory:") {
+/** Synchronous sleep (better-sqlite3 is synchronous) for backing off a busy db. */
+function syncSleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Switch the db to WAL, tolerating a concurrent opener of a fresh file.
+ * journal_mode is a persistent property of the file, so only the first opener
+ * must set it — but SQLite does NOT invoke the busy-timeout handler for a
+ * journal_mode change, so a racing opener gets SQLITE_BUSY immediately instead
+ * of waiting. Retry with a short backoff until the file reports WAL (whoever
+ * wins sets it for everyone). If it never takes within the budget, proceed in
+ * the default journal mode rather than crash session start: correctness holds,
+ * only cross-process write concurrency is reduced.
+ */
+function enableWalMode(db: Database.Database): void {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      if ((db.pragma("journal_mode = WAL", { simple: true }) as string) === "wal") return;
+    } catch (err) {
+      if ((err as { code?: string }).code !== "SQLITE_BUSY") throw err;
+    }
+    if ((db.pragma("journal_mode", { simple: true }) as string) === "wal") return;
+    syncSleep(20);
+  }
+}
+
+export function openDatabase(dbPath: string, readonly = false): Database.Database {
+  if (!readonly && dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
   }
-  const db = new Database(dbPath);
-  // WAL: Claude Desktop and Claude Code may both hold this file open.
-  db.pragma("journal_mode = WAL");
+  const db = new Database(dbPath, readonly ? { readonly: true, fileMustExist: true } : {});
+  // busy_timeout FIRST, before any pragma or migration that can contend: a
+  // concurrent opener (Claude Desktop + Claude Code, or two fresh sessions on a
+  // not-yet-created db) then waits up to 5s for the lock instead of failing
+  // immediately with SQLITE_BUSY.
   db.pragma("busy_timeout = 5000");
-  db.pragma("synchronous = NORMAL");
+  if (!readonly) {
+    // WAL pragmas write to the db header / create -wal, so only on a writer.
+    enableWalMode(db);
+    db.pragma("synchronous = NORMAL");
+  }
   db.pragma("foreign_keys = ON");
   return db;
 }
