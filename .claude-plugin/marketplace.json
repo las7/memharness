@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "memharness",
+  "description": "Bi-temporal, provenance-carrying long-term memory for AI agents, packaged so the proactive experience installs in one command.",
+  "owner": {
+    "name": "las7"
+  },
+  "plugins": [
+    {
+      "name": "memharness",
+      "description": "Long-term memory for Claude Code: the memharness MCP server plus a session-start recall hook, a post-commit capture nudge, and a proactive-use policy skill. Turns the raw tools into the proactive memory experience without hand-editing your harness.",
+      "author": {
+        "name": "las7"
+      },
+      "category": "productivity",
+      "source": "./plugins/memharness",
+      "homepage": "https://github.com/las7/memharness"
+    }
+  ]
+}

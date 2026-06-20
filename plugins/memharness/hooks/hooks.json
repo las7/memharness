@@ -1,0 +1,29 @@
+{
+  "description": "memharness: inject relevant memories at session start, and nudge durable-fact capture after git commits.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx -y -p @memharness/mcp memharness-context --subject user",
+            "timeout": 60,
+            "statusMessage": "Loading memharness memory..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/capture-on-commit.sh\"",
+            "statusMessage": "Checking for durable facts to remember..."
+          }
+        ]
+      }
+    ]
+  }
+}

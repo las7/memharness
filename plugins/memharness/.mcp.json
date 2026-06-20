@@ -1,0 +1,6 @@
+{
+  "memharness": {
+    "command": "npx",
+    "args": ["-y", "@memharness/mcp"]
+  }
+}
