@@ -331,6 +331,21 @@ export class Memharness {
     return stmt;
   }
 
+  /**
+   * "Now" for current-belief recall: real wall-clock, but never behind the
+   * latest committed tx_at. Under a burst of writes the monotonic clock
+   * (clock.ts) can stamp valid_from a few ms ahead of wall-clock; without this
+   * clamp a fresh reader process — whose clock starts at real time — would
+   * transiently hide those just-committed facts via CURRENT_FILTER
+   * (valid_from <= now). as_of recall is unaffected (it filters on the caller's
+   * instant, not now).
+   */
+  private currentNow(): string {
+    const now = this.clock.now();
+    const maxTx = (this.prep(sql.MAX_TX_AT).get() as { m: string | null }).m;
+    return maxTx !== null && maxTx > now ? maxTx : now;
+  }
+
   remember(input: RememberInput): RememberResult {
     const subject = requireText(input.subject, "subject");
     const fact = requireText(input.fact, "fact");
@@ -431,7 +446,7 @@ export class Memharness {
 
     const filters: string[] = [asOf !== null ? sql.AS_OF_FILTER : sql.CURRENT_FILTER];
     const params: Record<string, unknown> = {
-      now: this.clock.now(),
+      now: asOf !== null ? this.clock.now() : this.currentNow(),
       hlSemantic: this.ranking.halfLifeDays,
       hlEpisodic: this.ranking.kindHalfLifeDays.episodic,
       hlProcedural: this.ranking.kindHalfLifeDays.procedural,

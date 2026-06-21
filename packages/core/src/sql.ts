@@ -214,6 +214,9 @@ export const STATS_TOTAL = "SELECT COUNT(*) AS c FROM facts";
 
 export const STATS_CURRENT = `SELECT COUNT(*) AS c FROM facts f WHERE ${CURRENT_FILTER}`;
 
+/** Latest transaction time — clamps current-recall "now" past a monotonic clock that ran ahead of wall-clock. */
+export const MAX_TX_AT = "SELECT MAX(tx_at) AS m FROM facts";
+
 export const STATS_TOP_SUBJECTS = `SELECT f.subject, COUNT(*) AS c FROM facts f
 WHERE ${CURRENT_FILTER}
 GROUP BY f.subject ORDER BY c DESC, f.subject LIMIT 10`;
