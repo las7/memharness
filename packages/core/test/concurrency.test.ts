@@ -52,12 +52,13 @@ describe("cold-start concurrency", () => {
     for (const r of results) expect(r.code, `worker exited ${r.code}: ${r.err}`).toBe(0);
 
     // Every write from every process persisted: no silent loss under contention.
-    // Assert on the raw total, NOT recall(): a fresh reader's clock can briefly
-    // sit behind the writers' monotonic-bumped valid_from, so CURRENT_FILTER
-    // (valid_from <= now) transiently hides the very newest facts from recall.
-    // That visibility effect is separate from durability — the rows are all here.
     const mem = Memharness.open({ dbPath });
     expect(mem.stats().totalFacts).toBe(N * each);
+    // recall returns them all too: a fresh reader's wall-clock "now" could sit
+    // behind the writers' monotonic-bumped valid_from and hide the newest facts
+    // via CURRENT_FILTER. Memharness.currentNow() clamps "now" up to the latest
+    // committed tx_at so cross-process current-belief recall stays complete.
+    expect(mem.recall({ subject: "c", limit: 10_000 }).facts.length).toBe(N * each);
     expect(mem.stats().schemaVersion).toBeGreaterThanOrEqual(1);
     mem.close();
   }, 30_000);
