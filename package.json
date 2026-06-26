@@ -13,7 +13,8 @@
     "format": "biome format --write .",
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
-    "release": "pnpm build && pnpm -r --filter=!@memharness/eval publish --access public --no-git-checks",
+    "version:set": "node scripts/sync-versions.mjs",
+    "release": "pnpm build && node scripts/check-publishable.mjs && pnpm -r --filter=!@memharness/eval publish --access public --no-git-checks",
     "test": "pnpm -r test",
     "test:property": "pnpm --filter @memharness/core test:property",
     "bench": "pnpm --filter @memharness/core bench"

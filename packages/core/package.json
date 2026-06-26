@@ -1,6 +1,6 @@
 {
   "name": "@memharness/core",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Bi-temporal, provenance-carrying memory primitive for AI agents. One SQLite file, zero LLM calls.",
   "license": "Apache-2.0",
   "publishConfig": {
