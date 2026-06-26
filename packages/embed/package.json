@@ -1,6 +1,6 @@
 {
   "name": "@memharness/embed",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Local, offline-after-download text embeddings for memharness hybrid recall. Lives outside @memharness/core so the storage write path stays model-free (I5).",
   "license": "Apache-2.0",
   "publishConfig": {
