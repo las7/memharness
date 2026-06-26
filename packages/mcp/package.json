@@ -1,6 +1,6 @@
 {
   "name": "@memharness/mcp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "mcpName": "io.github.las7/memharness",
   "description": "MCP server exposing memharness bi-temporal agent memory: remember, recall, revise, diff, why, forget, stats.",
   "license": "Apache-2.0",
